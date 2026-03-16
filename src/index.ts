@@ -78,6 +78,29 @@ interface HandleMessageParams {
   client: any;
 }
 
+const PROCESSING_PHRASES = [
+  "Processing...",
+  "Exploring the codebase...",
+  "Reading files...",
+  "Analyzing the code...",
+  "Putting it all together...",
+  "Almost there...",
+];
+
+function buildProcessingBlocks(status: string): any[] {
+  return [
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `_${status}_`,
+        },
+      ],
+    },
+  ];
+}
+
 async function handleMessage({ text, channelId, userId, threadTs, ts, say, client }: HandleMessageParams) {
   const sessionKey = getSessionKey(channelId, threadTs, userId);
   const dirKey = getDirectoryKey(channelId, threadTs, userId);
@@ -112,31 +135,47 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
     return;
   }
 
-  // Post initial "thinking" message
+  // Post initial processing message with context block
   const thinkingResponse = await client.chat.postMessage({
     channel: channelId,
-    text: ":hourglass_flowing_sand: Thinking...",
+    text: "Processing...",
+    blocks: buildProcessingBlocks("Processing..."),
     thread_ts: threadTs || ts,
   });
 
   const messageTs = thinkingResponse.ts!;
   let accumulatedText = "";
   let lastUpdate = 0;
-  const UPDATE_INTERVAL = 1500; // 1.5 seconds debounce
+  let statusIndex = 0;
+  const UPDATE_INTERVAL = 1500;
 
   try {
     for await (const message of streamClaude(text, cwd, sessionKey)) {
+      const now = Date.now();
+
       if (message.type === "assistant") {
         const newText = extractText(message as SDKAssistantMessage);
         if (newText) {
           accumulatedText = newText;
 
-          // Update Slack with debounce — only show Claude's text, no tool details
-          const now = Date.now();
+          // Show Claude's text with debounce
           if (now - lastUpdate >= UPDATE_INTERVAL) {
             lastUpdate = now;
             await updateSlackMessage(client, channelId, messageTs, accumulatedText);
           }
+        } else if (!accumulatedText && now - lastUpdate >= 3000) {
+          // No text yet — rotate processing status
+          lastUpdate = now;
+          statusIndex++;
+          const status = PROCESSING_PHRASES[statusIndex % PROCESSING_PHRASES.length];
+          try {
+            await client.chat.update({
+              channel: channelId,
+              ts: messageTs,
+              text: status,
+              blocks: buildProcessingBlocks(status),
+            });
+          } catch (_) {}
         }
       }
 
