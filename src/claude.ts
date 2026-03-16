@@ -51,8 +51,14 @@ export async function* streamClaude(
     abortController,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian"],
     maxTurns: 25,
+    mcpServers: {
+      atlassian: {
+        type: "http" as const,
+        url: "https://mcp.atlassian.com/v1/mcp",
+      },
+    },
   };
 
   if (existingSession?.sessionId) {
