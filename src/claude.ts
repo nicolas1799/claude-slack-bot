@@ -1,5 +1,34 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKMessage, Options } from "@anthropic-ai/claude-agent-sdk";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+
+function loadMcpCredentials(): Record<string, { url: string; accessToken?: string }> {
+  const credPath = join(process.env.HOME || "~", ".claude", ".credentials.json");
+  if (!existsSync(credPath)) return {};
+
+  try {
+    const data = JSON.parse(readFileSync(credPath, "utf-8"));
+    const mcpOAuth = data.mcpOAuth || {};
+    const result: Record<string, { url: string; accessToken?: string }> = {};
+
+    for (const [key, value] of Object.entries(mcpOAuth)) {
+      const cred = value as any;
+      if (cred.serverUrl && cred.accessToken) {
+        // Extract server name from key like "plugin:atlassian:atlassian|hash"
+        const name = cred.serverName?.split(":").pop() || key.split("|")[0];
+        result[name] = { url: cred.serverUrl, accessToken: cred.accessToken };
+      }
+    }
+
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+const mcpCredentials = loadMcpCredentials();
+console.log(`[mcp] Loaded credentials for: ${Object.keys(mcpCredentials).join(", ") || "none"}`);
 
 interface Session {
   sessionId?: string;
@@ -53,12 +82,16 @@ export async function* streamClaude(
     allowDangerouslySkipPermissions: true,
     allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian"],
     maxTurns: 25,
-    mcpServers: {
-      atlassian: {
-        type: "http" as const,
-        url: "https://mcp.atlassian.com/v1/mcp",
-      },
-    },
+    mcpServers: Object.fromEntries(
+      Object.entries(mcpCredentials).map(([name, cred]) => [
+        name,
+        {
+          type: "http" as const,
+          url: cred.url,
+          ...(cred.accessToken ? { headers: { Authorization: `Bearer ${cred.accessToken}` } } : {}),
+        },
+      ])
+    ),
   };
 
   if (existingSession?.sessionId) {
