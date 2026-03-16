@@ -1,6 +1,7 @@
 import type { SDKMessage, SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
+import slackify from "slackify-markdown";
 
-const SLACK_BLOCK_MAX = 2900; // section blocks have 3000 char limit, leave margin
+const SLACK_BLOCK_MAX = 2900;
 
 export function extractText(message: SDKAssistantMessage): string {
   if (!message.message?.content) return "";
@@ -41,93 +42,8 @@ export function extractToolUse(message: SDKAssistantMessage): string | null {
     .join("\n");
 }
 
-// Convert markdown tables to code blocks (Slack doesn't support tables)
-function convertTables(text: string): string {
-  const lines = text.split("\n");
-  const result: string[] = [];
-  let tableLines: string[] = [];
-  let inTable = false;
-
-  for (const line of lines) {
-    const isTableLine = /^\s*\|/.test(line);
-    const isSeparator = /^\s*\|[-:| ]+\|\s*$/.test(line);
-
-    if (isTableLine) {
-      if (!inTable) {
-        inTable = true;
-        tableLines = [];
-      }
-      if (!isSeparator) {
-        // Clean up the table line: remove outer pipes, trim cells
-        const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-        tableLines.push(cells.join("  |  "));
-      }
-    } else {
-      if (inTable) {
-        // Flush table as code block
-        result.push("```");
-        result.push(...tableLines);
-        result.push("```");
-        tableLines = [];
-        inTable = false;
-      }
-      result.push(line);
-    }
-  }
-
-  // Flush remaining table
-  if (inTable && tableLines.length > 0) {
-    result.push("```");
-    result.push(...tableLines);
-    result.push("```");
-  }
-
-  return result.join("\n");
-}
-
 export function formatForSlack(text: string): string {
-  // First convert tables to code blocks
-  text = convertTables(text);
-
-  // Process line by line, preserving code blocks
-  const lines = text.split("\n");
-  const result: string[] = [];
-  let inCodeBlock = false;
-
-  for (const line of lines) {
-    if (line.trimStart().startsWith("```")) {
-      inCodeBlock = !inCodeBlock;
-      result.push(line);
-      continue;
-    }
-
-    if (inCodeBlock) {
-      result.push(line);
-      continue;
-    }
-
-    let formatted = line;
-
-    // Headers: # Title → *Title*\n
-    formatted = formatted.replace(/^#{1,6}\s+(.+)$/, "*$1*");
-
-    // Bold: **text** → *text*
-    formatted = formatted.replace(/\*\*(.+?)\*\*/g, "*$1*");
-
-    // Italic: _text_ stays the same in Slack
-    // Strikethrough: ~~text~~ → ~text~
-    formatted = formatted.replace(/~~(.+?)~~/g, "~$1~");
-
-    // Links: [text](url) → <url|text>
-    formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>");
-
-    // Images: ![alt](url) → <url|alt>
-    formatted = formatted.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "<$2|$1>");
-
-    result.push(formatted);
-  }
-
-  return result.join("\n");
+  return slackify(text);
 }
 
 export function splitMessage(text: string): string[] {
@@ -142,7 +58,6 @@ export function splitMessage(text: string): string[] {
       break;
     }
 
-    // Try to split at a newline
     let splitAt = remaining.lastIndexOf("\n", SLACK_BLOCK_MAX);
     if (splitAt === -1 || splitAt < SLACK_BLOCK_MAX / 2) {
       splitAt = SLACK_BLOCK_MAX;
@@ -155,7 +70,6 @@ export function splitMessage(text: string): string[] {
   return chunks;
 }
 
-// Build Slack blocks from text, splitting into multiple sections if needed
 export function textToBlocks(text: string): any[] {
   const chunks = splitMessage(text);
   return chunks.map((chunk) => ({

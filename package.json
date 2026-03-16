@@ -10,11 +10,12 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",
     "@slack/bolt": "^4.4.0",
-    "dotenv": "^16.6.0"
+    "dotenv": "^16.6.0",
+    "slackify-markdown": "^4.5.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
+    "@types/node": "^22.0.0",
     "tsx": "^4.20.3",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.8.3"
   }
 }
