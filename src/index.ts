@@ -201,6 +201,14 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
     // Final update
     if (accumulatedText) {
       await sendFinalResponse(client, channelId, messageTs, threadTs || ts, accumulatedText);
+      // Send a short new message to trigger notification
+      try {
+        await client.chat.postMessage({
+          channel: channelId,
+          text: ":white_check_mark: Done.",
+          thread_ts: threadTs || ts,
+        });
+      } catch (_) {}
     } else {
       await updateSlackMessage(client, channelId, messageTs, ":warning: No response received.");
     }
