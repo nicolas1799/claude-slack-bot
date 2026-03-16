@@ -70,12 +70,101 @@ export function splitMessage(text: string): string[] {
   return chunks;
 }
 
+// Parse markdown table lines into { headers, rows }
+function parseMarkdownTable(lines: string[]): { headers: string[]; rows: string[][] } | null {
+  if (lines.length < 2) return null;
+
+  const parseLine = (line: string) =>
+    line.split("|").map((c) => c.trim()).filter((c) => c !== "");
+
+  const headers = parseLine(lines[0]);
+  if (headers.length === 0) return null;
+
+  // Skip separator line (index 1)
+  const rows: string[][] = [];
+  for (let i = 2; i < lines.length; i++) {
+    const cells = parseLine(lines[i]);
+    if (cells.length > 0) rows.push(cells);
+  }
+
+  return { headers, rows };
+}
+
+// Convert parsed table to Slack table block
+function markdownTableToSlackBlock(table: { headers: string[]; rows: string[][] }): any {
+  return {
+    type: "table",
+    columns: table.headers.map((h) => ({
+      text_type: "plain_text",
+      header: { type: "plain_text", text: h },
+      width: 1,
+    })),
+    rows: table.rows.map((row) => ({
+      cells: table.headers.map((_, i) => ({
+        type: "plain_text",
+        text: row[i] || "",
+      })),
+    })),
+  };
+}
+
+// Convert text to blocks, extracting markdown tables into Slack table blocks
 export function textToBlocks(text: string): any[] {
-  const chunks = splitMessage(text);
-  return chunks.map((chunk) => ({
-    type: "section",
-    text: { type: "mrkdwn", text: chunk },
-  }));
+  const lines = text.split("\n");
+  const blocks: any[] = [];
+  let textBuffer: string[] = [];
+  let tableLines: string[] = [];
+  let inTable = false;
+
+  const flushText = () => {
+    if (textBuffer.length === 0) return;
+    const content = textBuffer.join("\n").trim();
+    if (content) {
+      const chunks = splitMessage(content);
+      for (const chunk of chunks) {
+        blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
+      }
+    }
+    textBuffer = [];
+  };
+
+  const flushTable = () => {
+    if (tableLines.length === 0) return;
+    const table = parseMarkdownTable(tableLines);
+    if (table && table.rows.length > 0) {
+      blocks.push(markdownTableToSlackBlock(table));
+    } else {
+      // Fallback: couldn't parse, add as code block
+      textBuffer.push("```", ...tableLines, "```");
+    }
+    tableLines = [];
+  };
+
+  for (const line of lines) {
+    const isTableLine = /^\s*\|/.test(line);
+    const isSeparator = /^\s*\|[-:| ]+\|\s*$/.test(line);
+
+    if (isTableLine || isSeparator) {
+      if (!inTable) {
+        flushText();
+        inTable = true;
+      }
+      tableLines.push(line);
+    } else {
+      if (inTable) {
+        flushTable();
+        inTable = false;
+      }
+      textBuffer.push(line);
+    }
+  }
+
+  // Flush remaining
+  if (inTable) flushTable();
+  flushText();
+
+  // Slack has a 50 block limit
+  return blocks.slice(0, 50);
 }
 
 export function describeMessage(message: SDKMessage): string | null {
