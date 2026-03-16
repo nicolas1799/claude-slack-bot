@@ -149,6 +149,9 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
   let statusIndex = 0;
   const UPDATE_INTERVAL = 1500;
 
+  let lastAssistantText = "";
+  let gotResult = false;
+
   try {
     for await (const message of streamClaude(text, cwd, sessionKey)) {
       const now = Date.now();
@@ -156,30 +159,35 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       if (message.type === "assistant") {
         const newText = extractText(message as SDKAssistantMessage);
         if (newText) {
+          lastAssistantText = newText;
           accumulatedText = newText;
+        }
 
-          // Show Claude's text with debounce
-          if (now - lastUpdate >= UPDATE_INTERVAL) {
-            lastUpdate = now;
-            await updateSlackMessage(client, channelId, messageTs, accumulatedText);
-          }
-        } else if (!accumulatedText && now - lastUpdate >= 3000) {
-          // No text yet — rotate processing status
+        // Update with debounce
+        if (now - lastUpdate >= UPDATE_INTERVAL) {
           lastUpdate = now;
           statusIndex++;
           const status = PROCESSING_PHRASES[statusIndex % PROCESSING_PHRASES.length];
-          try {
-            await client.chat.update({
-              channel: channelId,
-              ts: messageTs,
-              text: status,
-              blocks: buildProcessingBlocks(status),
-            });
-          } catch (_) {}
+
+          if (accumulatedText) {
+            // Show text + processing indicator so user knows it's still working
+            await updateWithProcessing(client, channelId, messageTs, accumulatedText, status);
+          } else {
+            // No text yet, just show processing
+            try {
+              await client.chat.update({
+                channel: channelId,
+                ts: messageTs,
+                text: status,
+                blocks: buildProcessingBlocks(status),
+              });
+            } catch (_) {}
+          }
         }
       }
 
       if (message.type === "result") {
+        gotResult = true;
         const result = message as any;
         if (result.subtype === "error_result") {
           accumulatedText += `\n\n:x: Error: ${result.error || "Unknown error"}`;
@@ -202,6 +210,32 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       ? ":stop_sign: Cancelled."
       : `:x: Error: ${error.message || "Unknown error"}`;
     await updateSlackMessage(client, channelId, messageTs, errorText);
+  }
+}
+
+async function updateWithProcessing(
+  client: any,
+  channel: string,
+  ts: string,
+  text: string,
+  status: string,
+) {
+  try {
+    const formatted = formatForSlack(text);
+    const truncated = formatted.length > SLACK_BLOCK_LIMIT
+      ? formatted.slice(0, SLACK_BLOCK_LIMIT - 50) + "\n..."
+      : formatted;
+    await client.chat.update({
+      channel,
+      ts,
+      text: truncated,
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: truncated } },
+        { type: "context", elements: [{ type: "mrkdwn", text: `_${status}_` }] },
+      ],
+    });
+  } catch (e: any) {
+    console.error("Failed to update message with processing:", e.message);
   }
 }
 
