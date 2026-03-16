@@ -90,20 +90,24 @@ function parseMarkdownTable(lines: string[]): { headers: string[]; rows: string[
   return { headers, rows };
 }
 
-// Convert parsed table to Slack table block
+// Convert parsed table to Slack table block (max 100 rows, 20 columns)
 function markdownTableToSlackBlock(table: { headers: string[]; rows: string[][] }): any {
+  const cols = table.headers.slice(0, 20);
+  const dataRows = table.rows.slice(0, 99); // 99 data rows + 1 header = 100
+
   return {
     type: "table",
-    columns: table.headers.map((h) => ({
-      text_type: "plain_text",
-      header: { type: "plain_text", text: h },
-      width: 1,
-    })),
-    rows: table.rows.map((row) => ({
-      cells: table.headers.map((_, i) => ({
-        type: "plain_text",
-        text: row[i] || "",
-      })),
+    rows: [
+      // Header row
+      cols.map((h) => ({ type: "raw_text", text: h })),
+      // Data rows
+      ...dataRows.map((row) =>
+        cols.map((_, i) => ({ type: "raw_text", text: row[i] || "" }))
+      ),
+    ],
+    column_settings: cols.map(() => ({
+      align: "left",
+      is_wrapped: true,
     })),
   };
 }
