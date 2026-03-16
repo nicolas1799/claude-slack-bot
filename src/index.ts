@@ -174,10 +174,12 @@ async function updateSlackMessage(
   text: string
 ) {
   try {
+    const formatted = formatForSlack(text);
     await client.chat.update({
       channel,
       ts,
-      text: formatForSlack(text),
+      text: formatted,
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: formatted } }],
     });
   } catch (e: any) {
     console.error("Failed to update Slack message:", e.message);
@@ -202,6 +204,7 @@ async function sendFinalResponse(
       await client.chat.postMessage({
         channel,
         text: chunks[i],
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: chunks[i] } }],
         thread_ts: threadTs,
       });
     } catch (e: any) {

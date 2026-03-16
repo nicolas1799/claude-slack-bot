@@ -42,9 +42,45 @@ export function extractToolUse(message: SDKAssistantMessage): string | null {
 }
 
 export function formatForSlack(text: string): string {
-  // Slack uses mrkdwn which is close to markdown but not identical
-  // Bold: **text** → *text*
-  return text.replace(/\*\*(.+?)\*\*/g, "*$1*");
+  // Process line by line, preserving code blocks
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      result.push(line);
+      continue;
+    }
+
+    if (inCodeBlock) {
+      result.push(line);
+      continue;
+    }
+
+    let formatted = line;
+
+    // Headers: # Title → *Title*
+    formatted = formatted.replace(/^#{1,6}\s+(.+)$/, "*$1*");
+
+    // Bold: **text** → *text*
+    formatted = formatted.replace(/\*\*(.+?)\*\*/g, "*$1*");
+
+    // Italic: _text_ stays the same in Slack
+    // Strikethrough: ~~text~~ → ~text~
+    formatted = formatted.replace(/~~(.+?)~~/g, "~$1~");
+
+    // Links: [text](url) → <url|text>
+    formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>");
+
+    // Images: ![alt](url) → <url|alt>
+    formatted = formatted.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "<$2|$1>");
+
+    result.push(formatted);
+  }
+
+  return result.join("\n");
 }
 
 export function splitMessage(text: string): string[] {
