@@ -82,16 +82,9 @@ export async function* streamClaude(
     allowDangerouslySkipPermissions: true,
     allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian"],
     maxTurns: 25,
-    mcpServers: Object.fromEntries(
-      Object.entries(mcpCredentials).map(([name, cred]) => [
-        name,
-        {
-          type: "http" as const,
-          url: cred.url,
-          ...(cred.accessToken ? { headers: { Authorization: `Bearer ${cred.accessToken}` } } : {}),
-        },
-      ])
-    ),
+    plugins: [
+      { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
+    ],
   };
 
   if (existingSession?.sessionId) {
