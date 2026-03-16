@@ -41,7 +41,54 @@ export function extractToolUse(message: SDKAssistantMessage): string | null {
     .join("\n");
 }
 
+// Convert markdown tables to code blocks (Slack doesn't support tables)
+function convertTables(text: string): string {
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let tableLines: string[] = [];
+  let inTable = false;
+
+  for (const line of lines) {
+    const isTableLine = /^\s*\|/.test(line);
+    const isSeparator = /^\s*\|[-:| ]+\|\s*$/.test(line);
+
+    if (isTableLine) {
+      if (!inTable) {
+        inTable = true;
+        tableLines = [];
+      }
+      if (!isSeparator) {
+        // Clean up the table line: remove outer pipes, trim cells
+        const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+        tableLines.push(cells.join("  |  "));
+      }
+    } else {
+      if (inTable) {
+        // Flush table as code block
+        result.push("```");
+        result.push(...tableLines);
+        result.push("```");
+        tableLines = [];
+        inTable = false;
+      }
+      result.push(line);
+    }
+  }
+
+  // Flush remaining table
+  if (inTable && tableLines.length > 0) {
+    result.push("```");
+    result.push(...tableLines);
+    result.push("```");
+  }
+
+  return result.join("\n");
+}
+
 export function formatForSlack(text: string): string {
+  // First convert tables to code blocks
+  text = convertTables(text);
+
   // Process line by line, preserving code blocks
   const lines = text.split("\n");
   const result: string[] = [];
@@ -61,7 +108,7 @@ export function formatForSlack(text: string): string {
 
     let formatted = line;
 
-    // Headers: # Title → *Title*
+    // Headers: # Title → *Title*\n
     formatted = formatted.replace(/^#{1,6}\s+(.+)$/, "*$1*");
 
     // Bold: **text** → *text*

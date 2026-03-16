@@ -27,6 +27,7 @@ for (const key of required) {
 }
 
 const BASE_DIRECTORY = process.env.BASE_DIRECTORY!;
+const SLACK_BLOCK_LIMIT = 2900;
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -200,29 +201,20 @@ async function updateSlackMessage(
   channel: string,
   ts: string,
   text: string,
-  useBlocks = false
 ) {
   try {
     const formatted = formatForSlack(text);
-    // For streaming updates, truncate to avoid hitting limits
-    // For final messages, use blocks to handle long content
-    if (useBlocks) {
-      await client.chat.update({
-        channel,
-        ts,
-        text: formatted,
-        blocks: textToBlocks(formatted),
-      });
-    } else {
-      const truncated = formatted.length > 3000
-        ? formatted.slice(0, 2950) + "\n\n_...writing..._"
-        : formatted;
-      await client.chat.update({
-        channel,
-        ts,
-        text: truncated,
-      });
-    }
+    // Always use blocks for proper mrkdwn rendering
+    // Truncate to fit within a single block during streaming
+    const truncated = formatted.length > SLACK_BLOCK_LIMIT
+      ? formatted.slice(0, SLACK_BLOCK_LIMIT - 50) + "\n\n_...writing..._"
+      : formatted;
+    await client.chat.update({
+      channel,
+      ts,
+      text: truncated,
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: truncated } }],
+    });
   } catch (e: any) {
     console.error("Failed to update Slack message:", e.message);
   }
@@ -237,8 +229,18 @@ async function sendFinalResponse(
 ) {
   const chunks = splitMessage(formatForSlack(text));
 
-  // Update the original message with the first chunk (with blocks for formatting)
-  await updateSlackMessage(client, channel, messageTs, chunks[0], true);
+  // Update the original message with the first chunk
+  const firstFormatted = formatForSlack(chunks[0]);
+  try {
+    await client.chat.update({
+      channel,
+      ts: messageTs,
+      text: firstFormatted,
+      blocks: textToBlocks(firstFormatted),
+    });
+  } catch (e: any) {
+    console.error("Failed to update final message:", e.message);
+  }
 
   // Post additional chunks as new messages in the thread
   for (let i = 1; i < chunks.length; i++) {
