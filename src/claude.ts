@@ -16,6 +16,7 @@ setInterval(() => {
   const now = Date.now();
   for (const [key, session] of sessions) {
     if (now - session.lastActivity > SESSION_TTL_MS) {
+      console.log(`[session] Expired: ${key}`);
       sessions.delete(key);
     }
   }
@@ -56,14 +57,41 @@ export async function* streamClaude(
 
   if (existingSession?.sessionId) {
     options.resume = existingSession.sessionId;
+    console.log(`[session] Resuming: ${conversationKey} -> ${existingSession.sessionId}`);
+  } else {
+    console.log(`[session] New session for: ${conversationKey}`);
   }
 
   try {
     for await (const message of query({ prompt, options })) {
-      // Capture session ID from system init message
-      if (message.type === "system" && "session_id" in message) {
-        const sessionId = (message as any).session_id;
+      // Log message types for debugging
+      if (message.type === "system") {
+        console.log(`[sdk] system message:`, JSON.stringify(message).slice(0, 300));
+      }
+
+      if (message.type === "result") {
+        console.log(`[sdk] result:`, JSON.stringify(message).slice(0, 300));
+      }
+
+      // Capture session ID - check multiple possible fields
+      if (message.type === "system") {
+        const msg = message as any;
+        const sessionId = msg.session_id || msg.sessionId;
         if (sessionId) {
+          console.log(`[session] Captured session ID: ${sessionId} for ${conversationKey}`);
+          sessions.set(conversationKey, {
+            sessionId,
+            lastActivity: Date.now(),
+          });
+        }
+      }
+
+      // Also check result messages for session ID
+      if (message.type === "result") {
+        const msg = message as any;
+        const sessionId = msg.session_id || msg.sessionId;
+        if (sessionId) {
+          console.log(`[session] Captured session ID from result: ${sessionId}`);
           sessions.set(conversationKey, {
             sessionId,
             lastActivity: Date.now(),
@@ -81,5 +109,7 @@ export async function* streamClaude(
     }
   } finally {
     activeAborts.delete(conversationKey);
+    const finalSession = sessions.get(conversationKey);
+    console.log(`[session] Query done. Session for ${conversationKey}: ${finalSession?.sessionId || "none"}`);
   }
 }
