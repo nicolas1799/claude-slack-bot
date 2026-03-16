@@ -3,16 +3,30 @@ import { resolve, join } from "path";
 
 const directories = new Map<string, string>();
 
-export function getConversationKey(
+// Key for session management (can vary per thread)
+export function getSessionKey(
   channelId: string,
   threadTs?: string,
   userId?: string
 ): string {
-  // DMs: use channel-user
+  // DMs: use channel-user (same session across threads in DM)
   if (channelId.startsWith("D")) return `${channelId}-${userId}`;
-  // Threads: use channel-thread
+  // Threads in channels: per thread
   if (threadTs) return `${channelId}-${threadTs}`;
   // Channels: just channel
+  return channelId;
+}
+
+// Key for directory lookup (stable, doesn't change with threads)
+export function getDirectoryKey(
+  channelId: string,
+  threadTs?: string,
+  userId?: string
+): string {
+  // DMs: always same directory per user-channel
+  if (channelId.startsWith("D")) return `${channelId}-${userId}`;
+  // Channels: check thread first, fall back to channel
+  if (threadTs) return `${channelId}-${threadTs}`;
   return channelId;
 }
 
@@ -44,6 +58,19 @@ export function setDirectory(
   return { ok: true, resolved };
 }
 
-export function getDirectory(key: string): string | undefined {
-  return directories.get(key);
+export function getDirectory(
+  channelId: string,
+  threadTs?: string,
+  userId?: string
+): string | undefined {
+  const key = getDirectoryKey(channelId, threadTs, userId);
+  const exact = directories.get(key);
+  if (exact) return exact;
+
+  // Fallback: for threads in channels, check the channel-level directory
+  if (threadTs && !channelId.startsWith("D")) {
+    return directories.get(channelId);
+  }
+
+  return undefined;
 }

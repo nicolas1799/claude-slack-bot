@@ -5,7 +5,8 @@ import {
   parseCommand,
   setDirectory,
   getDirectory,
-  getConversationKey,
+  getSessionKey,
+  getDirectoryKey,
 } from "./directories.js";
 import {
   extractText,
@@ -77,13 +78,14 @@ interface HandleMessageParams {
 }
 
 async function handleMessage({ text, channelId, userId, threadTs, ts, say, client }: HandleMessageParams) {
-  const conversationKey = getConversationKey(channelId, threadTs, userId);
+  const sessionKey = getSessionKey(channelId, threadTs, userId);
+  const dirKey = getDirectoryKey(channelId, threadTs, userId);
 
   // Handle cwd commands
   const command = parseCommand(text);
   if (command) {
     if (command.type === "get") {
-      const dir = getDirectory(conversationKey);
+      const dir = getDirectory(channelId, threadTs, userId);
       const response = dir
         ? `Working directory: \`${dir}\``
         : "No working directory set. Use `cwd <repo-name>` to set one.";
@@ -91,7 +93,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       return;
     }
 
-    const result = setDirectory(conversationKey, command.path, BASE_DIRECTORY);
+    const result = setDirectory(dirKey, command.path, BASE_DIRECTORY);
     const response = result.ok
       ? `Working directory set: \`${result.resolved}\``
       : result.error;
@@ -99,8 +101,8 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
     return;
   }
 
-  // Check working directory
-  const cwd = getDirectory(conversationKey);
+  // Check working directory (with fallback to channel-level)
+  const cwd = getDirectory(channelId, threadTs, userId);
   if (!cwd) {
     await say({
       text: "No working directory set. Use `cwd <repo-name>` first.",
@@ -122,7 +124,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
   const UPDATE_INTERVAL = 1500; // 1.5 seconds debounce
 
   try {
-    for await (const message of streamClaude(text, cwd, conversationKey)) {
+    for await (const message of streamClaude(text, cwd, sessionKey)) {
       if (message.type === "assistant") {
         const newText = extractText(message as SDKAssistantMessage);
         if (newText) {
