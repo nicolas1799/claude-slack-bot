@@ -1,6 +1,6 @@
 import type { SDKMessage, SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
-const SLACK_MAX_LENGTH = 3800;
+const SLACK_BLOCK_MAX = 2900; // section blocks have 3000 char limit, leave margin
 
 export function extractText(message: SDKAssistantMessage): string {
   if (!message.message?.content) return "";
@@ -84,21 +84,21 @@ export function formatForSlack(text: string): string {
 }
 
 export function splitMessage(text: string): string[] {
-  if (text.length <= SLACK_MAX_LENGTH) return [text];
+  if (text.length <= SLACK_BLOCK_MAX) return [text];
 
   const chunks: string[] = [];
   let remaining = text;
 
   while (remaining.length > 0) {
-    if (remaining.length <= SLACK_MAX_LENGTH) {
+    if (remaining.length <= SLACK_BLOCK_MAX) {
       chunks.push(remaining);
       break;
     }
 
     // Try to split at a newline
-    let splitAt = remaining.lastIndexOf("\n", SLACK_MAX_LENGTH);
-    if (splitAt === -1 || splitAt < SLACK_MAX_LENGTH / 2) {
-      splitAt = SLACK_MAX_LENGTH;
+    let splitAt = remaining.lastIndexOf("\n", SLACK_BLOCK_MAX);
+    if (splitAt === -1 || splitAt < SLACK_BLOCK_MAX / 2) {
+      splitAt = SLACK_BLOCK_MAX;
     }
 
     chunks.push(remaining.slice(0, splitAt));
@@ -106,6 +106,15 @@ export function splitMessage(text: string): string[] {
   }
 
   return chunks;
+}
+
+// Build Slack blocks from text, splitting into multiple sections if needed
+export function textToBlocks(text: string): any[] {
+  const chunks = splitMessage(text);
+  return chunks.map((chunk) => ({
+    type: "section",
+    text: { type: "mrkdwn", text: chunk },
+  }));
 }
 
 export function describeMessage(message: SDKMessage): string | null {

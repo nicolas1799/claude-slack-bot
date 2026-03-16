@@ -13,6 +13,7 @@ import {
   extractToolUse,
   formatForSlack,
   splitMessage,
+  textToBlocks,
 } from "./format.js";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
@@ -173,16 +174,30 @@ async function updateSlackMessage(
   client: any,
   channel: string,
   ts: string,
-  text: string
+  text: string,
+  useBlocks = false
 ) {
   try {
     const formatted = formatForSlack(text);
-    await client.chat.update({
-      channel,
-      ts,
-      text: formatted,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: formatted } }],
-    });
+    // For streaming updates, truncate to avoid hitting limits
+    // For final messages, use blocks to handle long content
+    if (useBlocks) {
+      await client.chat.update({
+        channel,
+        ts,
+        text: formatted,
+        blocks: textToBlocks(formatted),
+      });
+    } else {
+      const truncated = formatted.length > 3000
+        ? formatted.slice(0, 2950) + "\n\n_...writing..._"
+        : formatted;
+      await client.chat.update({
+        channel,
+        ts,
+        text: truncated,
+      });
+    }
   } catch (e: any) {
     console.error("Failed to update Slack message:", e.message);
   }
@@ -197,8 +212,8 @@ async function sendFinalResponse(
 ) {
   const chunks = splitMessage(formatForSlack(text));
 
-  // Update the original message with the first chunk
-  await updateSlackMessage(client, channel, messageTs, chunks[0]);
+  // Update the original message with the first chunk (with blocks for formatting)
+  await updateSlackMessage(client, channel, messageTs, chunks[0], true);
 
   // Post additional chunks as new messages in the thread
   for (let i = 1; i < chunks.length; i++) {
@@ -206,7 +221,7 @@ async function sendFinalResponse(
       await client.chat.postMessage({
         channel,
         text: chunks[i],
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: chunks[i] } }],
+        blocks: textToBlocks(chunks[i]),
         thread_ts: threadTs,
       });
     } catch (e: any) {
