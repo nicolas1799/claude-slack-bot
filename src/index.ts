@@ -10,7 +10,6 @@ import {
 } from "./directories.js";
 import {
   extractText,
-  extractToolUse,
   formatForSlack,
   splitMessage,
   textToBlocks,
@@ -125,47 +124,19 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
   let lastUpdate = 0;
   const UPDATE_INTERVAL = 1500; // 1.5 seconds debounce
 
-  let lastToolStatus = "";
-
   try {
     for await (const message of streamClaude(text, cwd, sessionKey)) {
-      const now = Date.now();
-
       if (message.type === "assistant") {
         const newText = extractText(message as SDKAssistantMessage);
         if (newText) {
           accumulatedText = newText;
-        }
 
-        const toolInfo = extractToolUse(message as SDKAssistantMessage);
-        if (toolInfo) {
-          lastToolStatus = toolInfo;
-        }
-
-        // Update Slack with debounce
-        if (now - lastUpdate >= UPDATE_INTERVAL) {
-          lastUpdate = now;
-          const displayText = lastToolStatus && accumulatedText
-            ? `${accumulatedText}\n\n_${lastToolStatus}_`
-            : lastToolStatus
-            ? `_${lastToolStatus}_`
-            : accumulatedText;
-          if (displayText) {
-            await updateSlackMessage(client, channelId, messageTs, displayText);
+          // Update Slack with debounce — only show Claude's text, no tool details
+          const now = Date.now();
+          if (now - lastUpdate >= UPDATE_INTERVAL) {
+            lastUpdate = now;
+            await updateSlackMessage(client, channelId, messageTs, accumulatedText);
           }
-        }
-      }
-
-      // Show tool progress (e.g., "Reading file...")
-      if (message.type === "tool_progress") {
-        const progress = (message as any).content || (message as any).tool_name;
-        if (progress && now - lastUpdate >= UPDATE_INTERVAL) {
-          lastToolStatus = `Using ${progress}...`;
-          lastUpdate = now;
-          const displayText = accumulatedText
-            ? `${accumulatedText}\n\n_${lastToolStatus}_`
-            : `_${lastToolStatus}_`;
-          await updateSlackMessage(client, channelId, messageTs, displayText);
         }
       }
 
@@ -174,7 +145,6 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
         if (result.subtype === "error_result") {
           accumulatedText += `\n\n:x: Error: ${result.error || "Unknown error"}`;
         }
-        // Capture final text from result if available
         if (result.result) {
           accumulatedText = result.result;
         }
