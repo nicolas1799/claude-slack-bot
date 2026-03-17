@@ -1,6 +1,7 @@
 import "dotenv/config";
-import { readdirSync, statSync, writeFileSync, mkdirSync } from "fs";
+import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 import { App } from "@slack/bolt";
 import { streamClaude, abortIfRunning } from "./claude.js";
 import {
@@ -51,8 +52,41 @@ function getDefaultCwd(): string | null {
 const TMP_DIR = "/tmp/slack-bot-files";
 mkdirSync(TMP_DIR, { recursive: true });
 
-async function downloadSlackFiles(files: any[], token: string): Promise<string[]> {
-  const paths: string[] = [];
+const AUDIO_EXTENSIONS = [".mp3", ".m4a", ".wav", ".ogg", ".webm", ".flac", ".aac", ".mp4"];
+
+function isAudioFile(filename: string): boolean {
+  return AUDIO_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext));
+}
+
+function transcribeAudio(filePath: string): string | null {
+  try {
+    console.log(`[whisper] Transcribing: ${filePath}`);
+    const outputDir = join(TMP_DIR, "whisper-out");
+    mkdirSync(outputDir, { recursive: true });
+    execSync(
+      `whisper "${filePath}" --model base --language es --output_format txt --output_dir "${outputDir}"`,
+      { timeout: 120000 }
+    );
+    // Whisper outputs a .txt file with the same name
+    const baseName = filePath.split("/").pop()!.replace(/\.[^.]+$/, "");
+    const txtPath = join(outputDir, `${baseName}.txt`);
+    const transcript = readFileSync(txtPath, "utf-8").trim();
+    console.log(`[whisper] Transcribed: ${transcript.slice(0, 100)}...`);
+    return transcript;
+  } catch (e: any) {
+    console.error(`[whisper] Failed to transcribe:`, e.message);
+    return null;
+  }
+}
+
+interface ProcessedFile {
+  path: string;
+  type: "file" | "transcript";
+  content?: string;
+}
+
+async function downloadSlackFiles(files: any[], token: string): Promise<ProcessedFile[]> {
+  const results: ProcessedFile[] = [];
   for (const file of files) {
     try {
       const url = file.url_private_download || file.url_private;
@@ -66,13 +100,43 @@ async function downloadSlackFiles(files: any[], token: string): Promise<string[]
       const buffer = Buffer.from(await response.arrayBuffer());
       const filePath = join(TMP_DIR, `${Date.now()}-${file.name || "file"}`);
       writeFileSync(filePath, buffer);
-      paths.push(filePath);
       console.log(`[files] Downloaded: ${file.name} -> ${filePath}`);
+
+      if (isAudioFile(file.name || "")) {
+        const transcript = transcribeAudio(filePath);
+        if (transcript) {
+          results.push({ path: filePath, type: "transcript", content: transcript });
+        } else {
+          results.push({ path: filePath, type: "file" });
+        }
+      } else {
+        results.push({ path: filePath, type: "file" });
+      }
     } catch (e: any) {
       console.error(`[files] Failed to download ${file.name}:`, e.message);
     }
   }
-  return paths;
+  return results;
+}
+
+function appendFileContext(text: string, files: ProcessedFile[]): string {
+  const parts: string[] = [];
+  const readFiles: string[] = [];
+
+  for (const f of files) {
+    if (f.type === "transcript") {
+      parts.push(`[Audio transcription:\n${f.content}]`);
+    } else {
+      readFiles.push(f.path);
+    }
+  }
+
+  if (readFiles.length > 0) {
+    const fileList = readFiles.map((p) => `- ${p}`).join("\n");
+    parts.push(`[The user attached files. Read them to analyze:\n${fileList}]`);
+  }
+
+  return `${text}\n\n${parts.join("\n\n")}`;
 }
 
 const app = new App({
@@ -97,10 +161,9 @@ app.message(async ({ message, say, client }) => {
 
   // Download attached files
   if (msg.files && msg.files.length > 0) {
-    const filePaths = await downloadSlackFiles(msg.files, process.env.SLACK_BOT_TOKEN!);
-    if (filePaths.length > 0) {
-      const fileList = filePaths.map((p) => `- ${p}`).join("\n");
-      text = `${text}\n\n[The user attached files. Read them to analyze:\n${fileList}]`;
+    const processed = await downloadSlackFiles(msg.files, process.env.SLACK_BOT_TOKEN!);
+    if (processed.length > 0) {
+      text = appendFileContext(text, processed);
     }
   }
 
@@ -116,10 +179,9 @@ app.event("app_mention", async ({ event, say, client }) => {
   // Download attached files
   const eventFiles = (event as any).files;
   if (eventFiles && eventFiles.length > 0) {
-    const filePaths = await downloadSlackFiles(eventFiles, process.env.SLACK_BOT_TOKEN!);
-    if (filePaths.length > 0) {
-      const fileList = filePaths.map((p) => `- ${p}`).join("\n");
-      text = `${text}\n\n[The user attached files. Read them to analyze:\n${fileList}]`;
+    const processed = await downloadSlackFiles(eventFiles, process.env.SLACK_BOT_TOKEN!);
+    if (processed.length > 0) {
+      text = appendFileContext(text, processed);
     }
   }
 
