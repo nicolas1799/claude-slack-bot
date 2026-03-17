@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { readdirSync, statSync } from "fs";
+import { readdirSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { App } from "@slack/bolt";
 import { streamClaude, abortIfRunning } from "./claude.js";
@@ -48,6 +48,33 @@ function getDefaultCwd(): string | null {
   return null;
 }
 
+const TMP_DIR = "/tmp/slack-bot-files";
+mkdirSync(TMP_DIR, { recursive: true });
+
+async function downloadSlackFiles(files: any[], token: string): Promise<string[]> {
+  const paths: string[] = [];
+  for (const file of files) {
+    try {
+      const url = file.url_private_download || file.url_private;
+      if (!url) continue;
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) continue;
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const filePath = join(TMP_DIR, `${Date.now()}-${file.name || "file"}`);
+      writeFileSync(filePath, buffer);
+      paths.push(filePath);
+      console.log(`[files] Downloaded: ${file.name} -> ${filePath}`);
+    } catch (e: any) {
+      console.error(`[files] Failed to download ${file.name}:`, e.message);
+    }
+  }
+  return paths;
+}
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   appToken: process.env.SLACK_APP_TOKEN,
@@ -59,23 +86,42 @@ let botUserId: string | undefined;
 
 // Handle DMs
 app.message(async ({ message, say, client }) => {
-  if (message.subtype) return; // Ignore edits, joins, etc.
+  if (message.subtype) return;
   const msg = message as any;
-  if (msg.bot_id) return; // Ignore bot messages
+  if (msg.bot_id) return;
 
-  const text = msg.text?.trim() || "";
+  let text = msg.text?.trim() || "";
   const channelId = msg.channel;
   const userId = msg.user;
   const threadTs = msg.thread_ts;
+
+  // Download attached files
+  if (msg.files && msg.files.length > 0) {
+    const filePaths = await downloadSlackFiles(msg.files, process.env.SLACK_BOT_TOKEN!);
+    if (filePaths.length > 0) {
+      const fileList = filePaths.map((p) => `- ${p}`).join("\n");
+      text = `${text}\n\n[The user attached files. Read them to analyze:\n${fileList}]`;
+    }
+  }
 
   await handleMessage({ text, channelId, userId, threadTs, ts: msg.ts, say, client });
 });
 
 // Handle @mentions
 app.event("app_mention", async ({ event, say, client }) => {
-  const text = (event.text || "")
+  let text = (event.text || "")
     .replace(/<@[A-Z0-9]+>/g, "")
     .trim();
+
+  // Download attached files
+  const eventFiles = (event as any).files;
+  if (eventFiles && eventFiles.length > 0) {
+    const filePaths = await downloadSlackFiles(eventFiles, process.env.SLACK_BOT_TOKEN!);
+    if (filePaths.length > 0) {
+      const fileList = filePaths.map((p) => `- ${p}`).join("\n");
+      text = `${text}\n\n[The user attached files. Read them to analyze:\n${fileList}]`;
+    }
+  }
 
   await handleMessage({
     text,
