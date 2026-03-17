@@ -80,23 +80,29 @@ export async function* streamClaude(
     abortController,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp"],
     maxTurns: 25,
     plugins: [
       { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
     ],
-    mcpServers: Object.fromEntries(
-      Object.entries(mcpCredentials)
-        .filter(([name]) => name !== "atlassian") // Atlassian handled by plugin
-        .map(([name, cred]) => [
-          name,
-          {
-            type: "http" as const,
-            url: cred.url,
-            ...(cred.accessToken ? { headers: { Authorization: `Bearer ${cred.accessToken}` } } : {}),
-          },
-        ])
-    ),
+    mcpServers: {
+      "notebooklm-mcp": {
+        command: join(process.env.HOME || "~", ".local", "bin", "notebooklm-mcp"),
+        args: [] as string[],
+      },
+      ...Object.fromEntries(
+        Object.entries(mcpCredentials)
+          .filter(([name]) => name !== "atlassian") // Atlassian handled by plugin
+          .map(([name, cred]) => [
+            name,
+            {
+              type: "http" as const,
+              url: cred.url,
+              ...(cred.accessToken ? { headers: { Authorization: `Bearer ${cred.accessToken}` } } : {}),
+            },
+          ])
+      ),
+    },
   };
 
   if (existingSession?.sessionId) {
