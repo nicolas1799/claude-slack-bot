@@ -1,7 +1,6 @@
 import "dotenv/config";
 import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
 import { App } from "@slack/bolt";
 import { streamClaude, abortIfRunning } from "./claude.js";
 import {
@@ -58,19 +57,32 @@ function isAudioFile(filename: string): boolean {
   return AUDIO_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext));
 }
 
-function transcribeAudio(filePath: string): string | null {
+async function transcribeAudio(filePath: string): Promise<string | null> {
   try {
-    console.log(`[whisper] Transcribing: ${filePath}`);
-    const outputDir = join(TMP_DIR, "whisper-out");
-    mkdirSync(outputDir, { recursive: true });
-    execSync(
-      `python3 -m whisper "${filePath}" --model small --language es --output_format txt --output_dir "${outputDir}"`,
-      { timeout: 180000 }
-    );
-    // Whisper outputs a .txt file with the same name
-    const baseName = filePath.split("/").pop()!.replace(/\.[^.]+$/, "");
-    const txtPath = join(outputDir, `${baseName}.txt`);
-    const transcript = readFileSync(txtPath, "utf-8").trim();
+    console.log(`[whisper] Transcribing via Groq: ${filePath}`);
+    const formData = new FormData();
+    const fileBuffer = readFileSync(filePath);
+    const blob = new Blob([fileBuffer]);
+    const fileName = filePath.split("/").pop() || "audio.m4a";
+    formData.append("file", blob, fileName);
+    formData.append("model", "whisper-large-v3");
+    formData.append("language", "es");
+
+    const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      console.error(`[whisper] Groq API error: ${response.status} ${await response.text()}`);
+      return null;
+    }
+
+    const result = await response.json() as any;
+    const transcript = result.text?.trim() || "";
     console.log(`[whisper] Transcribed: ${transcript.slice(0, 100)}...`);
     return transcript;
   } catch (e: any) {
@@ -103,7 +115,7 @@ async function downloadSlackFiles(files: any[], token: string): Promise<Processe
       console.log(`[files] Downloaded: ${file.name} -> ${filePath}`);
 
       if (isAudioFile(file.name || "")) {
-        const transcript = transcribeAudio(filePath);
+        const transcript = await transcribeAudio(filePath);
         if (transcript) {
           results.push({ path: filePath, type: "transcript", content: transcript });
         } else {
