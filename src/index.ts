@@ -150,8 +150,9 @@ let botUserId: string | undefined;
 
 // Handle DMs
 app.message(async ({ message, say, client }) => {
-  if (message.subtype) return;
   const msg = message as any;
+  // Allow file_share subtype, ignore others
+  if (msg.subtype && msg.subtype !== "file_share") return;
   if (msg.bot_id) return;
 
   let text = msg.text?.trim() || "";
