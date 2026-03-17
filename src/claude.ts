@@ -80,12 +80,23 @@ export async function* streamClaude(
     abortController,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase"],
     maxTurns: 25,
     plugins: [
       { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
-      { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "claude-plugins-official", "supabase", "d5c15b861cd2") },
     ],
+    mcpServers: Object.fromEntries(
+      Object.entries(mcpCredentials)
+        .filter(([name]) => name !== "atlassian") // Atlassian handled by plugin
+        .map(([name, cred]) => [
+          name,
+          {
+            type: "http" as const,
+            url: cred.url,
+            ...(cred.accessToken ? { headers: { Authorization: `Bearer ${cred.accessToken}` } } : {}),
+          },
+        ])
+    ),
   };
 
   if (existingSession?.sessionId) {
