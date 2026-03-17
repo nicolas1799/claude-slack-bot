@@ -64,8 +64,8 @@ function transcribeAudio(filePath: string): string | null {
     const outputDir = join(TMP_DIR, "whisper-out");
     mkdirSync(outputDir, { recursive: true });
     execSync(
-      `whisper "${filePath}" --model base --language es --output_format txt --output_dir "${outputDir}"`,
-      { timeout: 120000 }
+      `python3 -m whisper "${filePath}" --model base --language es --output_format txt --output_dir "${outputDir}"`,
+      { timeout: 180000 }
     );
     // Whisper outputs a .txt file with the same name
     const baseName = filePath.split("/").pop()!.replace(/\.[^.]+$/, "");
