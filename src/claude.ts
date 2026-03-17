@@ -84,6 +84,7 @@ export async function* streamClaude(
     maxTurns: 25,
     plugins: [
       { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
+      { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "claude-plugins-official", "supabase", "d5c15b861cd2") },
     ],
   };
 
