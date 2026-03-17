@@ -82,6 +82,7 @@ export async function* streamClaude(
     allowDangerouslySkipPermissions: true,
     allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp"],
     maxTurns: 25,
+    settingSources: ["user", "project", "local"],
     plugins: [
       { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
     ],
