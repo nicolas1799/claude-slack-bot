@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { readdirSync, statSync } from "fs";
+import { join } from "path";
 import { App } from "@slack/bolt";
 import { streamClaude, abortIfRunning } from "./claude.js";
 import {
@@ -27,6 +29,24 @@ for (const key of required) {
 
 const BASE_DIRECTORY = process.env.BASE_DIRECTORY!;
 const SLACK_BLOCK_LIMIT = 2900;
+
+function listRepos(): string[] {
+  try {
+    return readdirSync(BASE_DIRECTORY)
+      .filter((name) => {
+        const full = join(BASE_DIRECTORY, name);
+        return statSync(full).isDirectory() && !name.startsWith(".");
+      });
+  } catch {
+    return [];
+  }
+}
+
+function getDefaultCwd(): string | null {
+  const repos = listRepos();
+  if (repos.length === 1) return join(BASE_DIRECTORY, repos[0]);
+  return null;
+}
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -125,14 +145,25 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
     return;
   }
 
-  // Check working directory (with fallback to channel-level)
-  const cwd = getDirectory(channelId, threadTs, userId);
+  // Check working directory (with fallback to channel-level, then auto-detect)
+  let cwd = getDirectory(channelId, threadTs, userId);
   if (!cwd) {
-    await say({
-      text: "No working directory set. Use `cwd <repo-name>` first.",
-      thread_ts: threadTs || ts,
-    });
-    return;
+    const defaultCwd = getDefaultCwd();
+    if (defaultCwd) {
+      // Only one repo — use it automatically
+      cwd = defaultCwd;
+      setDirectory(dirKey, defaultCwd, BASE_DIRECTORY);
+    } else {
+      const repos = listRepos();
+      if (repos.length === 0) {
+        await say({ text: "No repos found in `" + BASE_DIRECTORY + "`.", thread_ts: threadTs || ts });
+        return;
+      }
+      // Multiple repos — prepend context to the prompt so Claude picks the right one
+      const repoList = repos.map((r) => `- ${r}`).join("\n");
+      text = `[SYSTEM: Available repos in ${BASE_DIRECTORY}:\n${repoList}\n\nThe user has NOT selected a working directory yet. Based on their message, pick the most relevant repo and use cwd to set it before answering. If unclear, ask which repo they mean.]\n\nUser message: ${text}`;
+      cwd = BASE_DIRECTORY;
+    }
   }
 
   // Post initial processing message with context block
