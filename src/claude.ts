@@ -80,7 +80,7 @@ export async function* streamClaude(
     abortController,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp", "mcp__stitch"],
     maxTurns: 25,
     settingSources: ["user", "project", "local"],
     plugins: [
