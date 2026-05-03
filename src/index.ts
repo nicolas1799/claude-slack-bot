@@ -179,6 +179,52 @@ const app = new App({
 let botUserId: string | undefined;
 
 // Handle DMs
+function prettyToolStatus(name: string): string {
+  if (name === "Bash") return "Ejecutando comando";
+  if (name === "Read") return "Leyendo archivo";
+  if (name === "Edit" || name === "Write") return "Editando archivo";
+  if (name === "Grep" || name === "Glob") return "Buscando";
+  if (name === "WebFetch") return "Consultando web";
+  if (name === "WebSearch") return "Buscando en la web";
+  if (name === "Task") return "Delegando a subagente";
+  if (name === "TodoWrite") return "Actualizando tareas";
+  if (name.startsWith("mcp__atlassian")) return "Consultando Atlassian";
+  if (name.startsWith("mcp__supabase")) return "Consultando Supabase";
+  if (name.startsWith("mcp__notebooklm")) return "Consultando NotebookLM";
+  if (name.startsWith("mcp__stitch")) return "Generando diseño";
+  if (name.startsWith("mcp__bot")) return "Revisando estado";
+  if (name.startsWith("mcp__")) return "Llamando MCP";
+  return name;
+}
+
+let statusDisabled = false;
+
+async function setThreadStatus(
+  client: any,
+  channel: string,
+  threadTs: string | undefined,
+  status: string,
+) {
+  if (statusDisabled || !threadTs) return;
+  try {
+    await client.assistant.threads.setStatus({
+      channel_id: channel,
+      thread_ts: threadTs,
+      status,
+    });
+  } catch (e: any) {
+    const code = e.data?.error || e.message || "";
+    if (String(code).includes("missing_scope")) {
+      console.warn(`[status] disabling setStatus permanently (${code})`);
+      statusDisabled = true;
+    } else if (String(code).includes("not_an_assistant_thread")) {
+      // Channel/thread isn't an Assistant thread — silently skip, don't spam logs
+    } else {
+      console.error(`[status] setStatus failed: ${code}`);
+    }
+  }
+}
+
 async function addReaction(client: any, channel: string, timestamp: string, name: string) {
   try {
     await client.reactions.add({ name, channel, timestamp });
@@ -322,10 +368,20 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
   }
 
   let accumulatedText = "";
+  const statusThreadTs = threadTs || ts;
+  await setThreadStatus(client, channelId, statusThreadTs, "Pensando…");
 
   try {
     for await (const message of streamClaude(text, cwd, sessionKey)) {
       if (message.type === "assistant") {
+        const content = (message as SDKAssistantMessage).message?.content || [];
+        const toolUses = content.filter((b: any) => b.type === "tool_use");
+        if (toolUses.length > 0) {
+          const labels = Array.from(new Set(toolUses.map((t: any) => prettyToolStatus(t.name))));
+          await setThreadStatus(client, channelId, statusThreadTs, `${labels.join(" · ")}…`);
+        } else {
+          await setThreadStatus(client, channelId, statusThreadTs, "Escribiendo respuesta…");
+        }
         const newText = extractText(message as SDKAssistantMessage);
         if (newText) accumulatedText = newText;
         continue;
@@ -361,6 +417,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       }
     }
 
+    await setThreadStatus(client, channelId, statusThreadTs, "");
     if (accumulatedText) {
       await postFinalResponse(client, channelId, threadTs || ts, accumulatedText);
       await finalize(REACT_DONE);
@@ -374,6 +431,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
     }
   } catch (error: any) {
     console.error("Error in Claude query:", error);
+    await setThreadStatus(client, channelId, statusThreadTs, "");
     const isAbort = error.name === "AbortError";
     const errorText = isAbort
       ? ":double_vertical_bar: Cancelado."
