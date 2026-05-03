@@ -18,6 +18,9 @@ import {
   splitMessage,
   textToBlocks,
 } from "./format.js";
+import { resolveMentions } from "./mentions.js";
+import { runWithRequestContext } from "./request-context.js";
+import { hydrateJobs, bindSlackClient } from "./scheduler.js";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 // Validate required env vars
@@ -264,6 +267,8 @@ app.message(async ({ message, say, client }) => {
   const userId = msg.user;
   const threadTs = msg.thread_ts;
 
+  text = await resolveMentions(client, text, botUserId);
+
   await addReaction(client, channelId, msg.ts, REACT_THINKING);
 
   // Download attached files
@@ -279,9 +284,7 @@ app.message(async ({ message, say, client }) => {
 
 // Handle @mentions
 app.event("app_mention", async ({ event, say, client }) => {
-  let text = (event.text || "")
-    .replace(/<@[A-Z0-9]+>/g, "")
-    .trim();
+  let text = await resolveMentions(client, event.text || "", botUserId);
 
   await addReaction(client, event.channel, event.ts, REACT_THINKING);
 
@@ -372,8 +375,11 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
   const statusThreadTs = threadTs || ts;
   await setThreadStatus(client, channelId, statusThreadTs, "Pensando…");
 
+  const ctxThreadTs = threadTs || ts;
+
   try {
-    for await (const message of streamClaude(text, cwd, sessionKey)) {
+    await runWithRequestContext({ channelId, threadTs: ctxThreadTs, sessionKey, cwd, userId }, async () => {
+    for await (const message of streamClaude(text, cwd!, sessionKey)) {
       if (message.type === "assistant") {
         const content = (message as SDKAssistantMessage).message?.content || [];
         const toolUses = content.filter((b: any) => b.type === "tool_use");
@@ -429,6 +435,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       });
       await finalize(REACT_ERROR);
     }
+    });
   } catch (error: any) {
     console.error("Error in Claude query:", error);
     await setThreadStatus(client, channelId, statusThreadTs, "");
@@ -472,6 +479,8 @@ async function postFinalResponse(
   await app.start();
   const authResult = await app.client.auth.test();
   botUserId = authResult.user_id;
+  bindSlackClient(app.client);
+  await hydrateJobs();
   console.log(`Bot is running! (user: ${botUserId})`);
   console.log(`Base directory: ${BASE_DIRECTORY}`);
 })();

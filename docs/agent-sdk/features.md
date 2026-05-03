@@ -26,7 +26,9 @@ Markers: ✅ en uso · 🟡 planeado · ⬜ no usado · ⚠️ preview/inestable
 | ⬜ `maxBudgetUsd` — removido (no necesario por ahora; tracking de costo via `mcp__bot__cost_stats` + Firestore `bot_costs`) | — |
 | ✅ `additionalDirectories` (env `ADDITIONAL_DIRECTORIES`, csv) | `src/claude.ts` |
 | ✅ `systemPrompt` preset+append | `src/claude.ts` |
-| ✅ Custom tools `mcp__bot__*` (bot_status, vm_metrics, service_status, cost_stats) | `src/sdk-tools.ts` |
+| ✅ Custom tools `mcp__bot__*` (bot_status, vm_metrics, service_status, cost_stats, schedule_create/list/delete) | `src/sdk-tools.ts` |
+| ✅ Scheduler interno (Map + Firestore `bot_jobs`, AsyncLocalStorage para inyectar contexto en tools) | `src/scheduler.ts`, `src/request-context.ts` |
+| ✅ Resolución de menciones Slack (`<@U...>` → `@DisplayName`) | `src/mentions.ts` |
 | ✅ Hook `PostToolUse` → audit log Firestore | `src/claude.ts`, `src/firestore.ts` |
 | ✅ Hook `PostToolUseFailure` → log + audit | `src/claude.ts` |
 | ✅ Hook `UserPromptSubmit` → inyecta date+branch+dirty | `src/claude.ts` |

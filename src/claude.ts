@@ -229,6 +229,7 @@ function buildSystemPromptAppend(cwd: string, prompt: string): string {
     "Para info de la propia VM y del bot (CPU/mem/disco de la VM, sesiones activas, status del servicio systemd) usá los tools mcp__bot__* (vm_metrics, bot_status, service_status). " +
     "Para info y operaciones de GCP (proyectos, instancias, Cloud Run, Cloud SQL, Firestore, IAM, logs en Cloud Logging, etc.) usá `gcloud` vía Bash. Combiná ambos enfoques cuando haga falta. " +
     "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot. " +
+    "Si el usuario pide chequeos recurrentes ('cada N minutos revisá X', 'avisame cuando termine Y', 'recordame en X minutos'), usá mcp__bot__schedule_create — corre prompts en este mismo thread cada intervalo. Cuando la condición a esperar se cumpla, el run programado debe llamar mcp__bot__schedule_delete con su jobId para parar. Para listar/cancelar: mcp__bot__schedule_list / schedule_delete. Cap 10 jobs activos, mín 30s, máx 24h. " +
     "Si el usuario pide guardar/recordar/olvidar algo (palabras como 'recordá', 'guardá', 'memoria', 'olvidá'), seguí las instrucciones de # auto memory que aparecen abajo.";
 
   if (!MEMORY_TRIGGER.test(prompt)) return ops;

@@ -4,6 +4,8 @@ import { execSync } from "child_process";
 import os from "os";
 import { statfsSync } from "fs";
 import { getCostSummary, getTopCostConversations } from "./cost.js";
+import { createJob, deleteJobById, listJobs, getActiveJobCount } from "./scheduler.js";
+import { getRequestContext } from "./request-context.js";
 
 const botStartTime = Date.now();
 
@@ -105,6 +107,71 @@ const costStats = tool(
   }
 );
 
+const scheduleCreate = tool(
+  "schedule_create",
+  "Schedule a recurring (or one-shot) prompt to run in this same Slack thread. Use for 'every N minutes check X', 'remind me at...', polling for build/deploy completion. The scheduled prompt re-uses the current conversation session, so it has full context. When the watched condition is met (e.g. build finished), the scheduled run should call mcp__bot__schedule_delete with its jobId to stop. Cap: 10 active jobs total. Min interval 30s. Max interval 24h.",
+  {
+    intervalMinutes: z.number().positive().max(1440).describe("How often to run, in minutes. Min 0.5, max 1440 (24h)."),
+    prompt: z.string().min(1).describe("The prompt to execute on each tick. Will be processed in this same thread/session."),
+    oneShot: z.boolean().optional().describe("If true, run once after the interval and auto-delete. Default false (recurring)."),
+  },
+  async ({ intervalMinutes, prompt, oneShot }) => {
+    const ctx = getRequestContext();
+    if (!ctx) return ok(JSON.stringify({ error: "no request context — cannot schedule from outside a Slack-initiated query" }));
+    const intervalMs = Math.round(intervalMinutes * 60 * 1000);
+    const result = createJob({
+      intervalMs,
+      prompt,
+      oneShot: !!oneShot,
+      channelId: ctx.channelId,
+      threadTs: ctx.threadTs,
+      sessionKey: ctx.sessionKey,
+      cwd: ctx.cwd,
+      createdBy: ctx.userId,
+    });
+    if (!result.ok) return ok(JSON.stringify({ error: result.error }));
+    return ok(
+      JSON.stringify(
+        {
+          jobId: result.jobId,
+          intervalMinutes,
+          oneShot: !!oneShot,
+          nextRunInSec: Math.round(intervalMs / 1000),
+          activeJobs: getActiveJobCount(),
+        },
+        null,
+        2
+      )
+    );
+  }
+);
+
+const scheduleList = tool(
+  "schedule_list",
+  "List active scheduled jobs. Without args, lists jobs in the current thread. Set scope='all' to see jobs across the bot.",
+  {
+    scope: z.enum(["thread", "all"]).optional().describe("'thread' (default) limits to current thread, 'all' returns every active job"),
+  },
+  async ({ scope }) => {
+    const ctx = getRequestContext();
+    const filter = scope === "all" ? undefined : ctx ? { channelId: ctx.channelId, threadTs: ctx.threadTs } : undefined;
+    const list = listJobs(filter);
+    return ok(JSON.stringify({ count: list.length, jobs: list }, null, 2));
+  }
+);
+
+const scheduleDelete = tool(
+  "schedule_delete",
+  "Stop and delete a scheduled job by its jobId. Call this when the watched condition is met (build done, deploy succeeded, etc.) or when the user asks to cancel.",
+  {
+    jobId: z.string().min(1).describe("The jobId returned by schedule_create"),
+  },
+  async ({ jobId }) => {
+    const removed = deleteJobById(jobId);
+    return ok(JSON.stringify({ ok: removed, jobId, message: removed ? "deleted" : "not found" }));
+  }
+);
+
 let getCounts: () => Promise<{ sessionCount: number; directoryCount: number }> = async () => ({
   sessionCount: 0,
   directoryCount: 0,
@@ -117,7 +184,7 @@ export function registerCountsProvider(fn: typeof getCounts): void {
 export const sdkToolsServer = createSdkMcpServer({
   name: "bot",
   version: "1.0.0",
-  tools: [botStatus, vmMetrics, serviceStatus, costStats],
+  tools: [botStatus, vmMetrics, serviceStatus, costStats, scheduleCreate, scheduleList, scheduleDelete],
 });
 
 export const sdkToolNames = [
@@ -125,4 +192,7 @@ export const sdkToolNames = [
   "mcp__bot__vm_metrics",
   "mcp__bot__service_status",
   "mcp__bot__cost_stats",
+  "mcp__bot__schedule_create",
+  "mcp__bot__schedule_list",
+  "mcp__bot__schedule_delete",
 ];

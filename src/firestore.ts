@@ -5,6 +5,7 @@ const db = new Firestore();
 const SESSIONS = "bot_sessions";
 const DIRECTORIES = "bot_directories";
 const COSTS = "bot_costs";
+const JOBS = "bot_jobs";
 
 export interface PersistedSession {
   sessionId: string;
@@ -115,6 +116,49 @@ export function saveCost(key: string, cost: PersistedCost): void {
     .doc(key)
     .set(cost)
     .catch((e) => console.error(`[firestore] saveCost ${key} failed:`, e.message));
+}
+
+export interface PersistedJob {
+  jobId: string;
+  channelId: string;
+  threadTs: string;
+  sessionKey: string;
+  cwd: string;
+  intervalMs: number;
+  prompt: string;
+  oneShot: boolean;
+  nextRunAt: number;
+  createdAt: number;
+  createdBy?: string;
+  runs: number;
+}
+
+export async function loadAllJobs(): Promise<Map<string, PersistedJob>> {
+  const result = new Map<string, PersistedJob>();
+  try {
+    const snap = await db.collection(JOBS).get();
+    snap.forEach((doc) => {
+      const data = doc.data() as PersistedJob;
+      if (data.jobId) result.set(doc.id, data);
+    });
+  } catch (e: any) {
+    console.error(`[firestore] loadAllJobs failed:`, e.message);
+  }
+  return result;
+}
+
+export function saveJob(job: PersistedJob): void {
+  db.collection(JOBS)
+    .doc(job.jobId)
+    .set(job)
+    .catch((e) => console.error(`[firestore] saveJob ${job.jobId} failed:`, e.message));
+}
+
+export function deleteJob(jobId: string): void {
+  db.collection(JOBS)
+    .doc(jobId)
+    .delete()
+    .catch((e) => console.error(`[firestore] deleteJob ${jobId} failed:`, e.message));
 }
 
 export function logAudit(entry: AuditEntry): void {
