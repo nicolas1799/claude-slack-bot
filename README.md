@@ -6,7 +6,9 @@ Bot de Slack que integra Claude Code para interactuar con repositorios, Jira, Su
 
 - **Chat con Claude Code** via DM o @mention en canales
 - **Auto-deteccion de repo** — si hay un solo repo, lo usa automaticamente. Si hay varios, Claude elige basandose en el contexto
-- **Sesiones persistentes** — mantiene el contexto de la conversacion por thread/DM
+- **Sesiones persistentes** — mantiene el contexto de la conversacion por thread/DM, persistido en Firestore (sobrevive a restarts)
+- **Modelo Opus 4.7** fijo por default
+- **Operaciones de infra** — gcloud read/write con denylist para ops irreversibles
 - **Streaming** — muestra respuestas progresivamente con indicador de procesamiento
 - **Archivos adjuntos** — sube imagenes, PDFs o cualquier archivo y Claude los analiza
 - **Transcripcion de audio** — envia notas de voz y se transcriben automaticamente via Groq (Whisper)
@@ -31,8 +33,9 @@ Bot de Slack que integra Claude Code para interactuar con repositorios, Jira, Su
 ```
 src/
   index.ts          — Entry point, Slack event handlers, file processing
-  claude.ts         — SDK query wrapper, session management, MCP config
+  claude.ts         — SDK query wrapper, session management, MCP config, hooks
   directories.ts    — Working directory management por conversacion
+  firestore.ts      — Persistencia de sesiones y cwd en Firestore (ADC)
   format.ts         — Markdown → Slack mrkdwn, table blocks
 ```
 
@@ -118,3 +121,26 @@ WantedBy=multi-user.target
 Los plugins de Claude Code se cargan desde `~/.claude/plugins/`. Los MCP servers HTTP se autentican usando las credenciales de `~/.claude/.credentials.json`.
 
 Para agregar un nuevo MCP server, edita `src/claude.ts` y agrega la config en `mcpServers`.
+
+## Persistencia (Firestore)
+
+Las sesiones (`bot_sessions`) y los `cwd` por conversacion (`bot_directories`) se persisten en Firestore (default DB del proyecto GCP). Esto sobrevive a `systemctl restart`.
+
+- En la VM GCP: usa Application Default Credentials via metadata server (sin keys).
+- En local: ejecutar `gcloud auth application-default login` una vez.
+- Las sesiones expiran a los 30 min de inactividad y se borran del Firestore.
+
+## Sudoers para self-deploy
+
+Para que el bot pueda redeployarse a si mismo, agregar a `/etc/sudoers.d/claude-slack-bot`:
+
+```
+nicolas ALL=(root) NOPASSWD: /bin/systemctl restart claude-slack-bot, /bin/systemctl status claude-slack-bot, /bin/journalctl -u claude-slack-bot *
+```
+
+## Operaciones gcloud
+
+El bot puede ejecutar `gcloud` arbitrariamente desde la VM (usa la service account default). Las operaciones irreversibles estan en `disallowedTools` en `src/claude.ts`:
+
+- `gcloud projects delete`, `compute instances delete`, `sql instances delete`, `firestore databases delete`
+- `rm -rf /`, `rm -rf ~`, `sudo rm`

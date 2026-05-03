@@ -1,7 +1,18 @@
 import { existsSync, statSync } from "fs";
 import { resolve, join } from "path";
+import { saveDirectory, loadAllDirectories } from "./firestore.js";
 
 const directories = new Map<string, string>();
+
+export async function hydrateDirectories(): Promise<void> {
+  const persisted = await loadAllDirectories();
+  for (const [key, cwd] of persisted) {
+    if (existsSync(cwd) && statSync(cwd).isDirectory()) {
+      directories.set(key, cwd);
+    }
+  }
+  console.log(`[firestore] Hydrated ${directories.size} directories`);
+}
 
 // Key for session management (can vary per thread)
 export function getSessionKey(
@@ -42,9 +53,14 @@ export function setDirectory(
   inputPath: string,
   baseDir: string
 ): { ok: true; resolved: string } | { ok: false; error: string } {
+  const resolvedBase = resolve(baseDir);
   const resolved = inputPath.startsWith("/")
-    ? inputPath
-    : resolve(join(baseDir, inputPath));
+    ? resolve(inputPath)
+    : resolve(join(resolvedBase, inputPath));
+
+  if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + "/")) {
+    return { ok: false, error: `Directory must be under \`${resolvedBase}\`` };
+  }
 
   if (!existsSync(resolved)) {
     return { ok: false, error: `Directory not found: \`${resolved}\`` };
@@ -55,7 +71,12 @@ export function setDirectory(
   }
 
   directories.set(key, resolved);
+  saveDirectory(key, resolved);
   return { ok: true, resolved };
+}
+
+export function getDirectoriesCount(): number {
+  return directories.size;
 }
 
 export function getDirectory(

@@ -4,10 +4,11 @@ Bot de Slack que conecta Claude Code con Slack via el Agent SDK. Corre en una VM
 
 ## Arquitectura
 
-4 archivos en `src/`:
-- `index.ts` — Bolt app (Socket Mode), event handlers para DMs y @mentions, descarga de archivos, transcripcion de audio via Groq
-- `claude.ts` — Wrapper del SDK `query()`, manejo de sesiones por conversacion, carga de MCP credentials desde `~/.claude/.credentials.json`, configuracion de plugins y MCP servers
-- `directories.ts` — Manejo de `cwd` por conversacion. DMs comparten directorio, threads en canales pueden tener cwd independiente con fallback al canal
+5 archivos en `src/`:
+- `index.ts` — Bolt app (Socket Mode), event handlers para DMs y @mentions, descarga de archivos, transcripcion de audio via Groq, manejo de stream_event partials
+- `claude.ts` — Wrapper del SDK `query()`, manejo de sesiones por conversacion, carga de MCP credentials desde `~/.claude/.credentials.json`, configuracion de plugins y MCP servers, hook PreToolUse, modelo Opus 4.7 fijo, denylist
+- `directories.ts` — Manejo de `cwd` por conversacion. DMs comparten directorio, threads en canales pueden tener cwd independiente con fallback al canal. Restringe paths a `BASE_DIRECTORY`
+- `firestore.ts` — Persistencia de sesiones y cwd via `@google-cloud/firestore` (ADC). Hidratacion al boot, write-through cache
 - `format.ts` — Conversion de markdown a Slack mrkdwn usando `slackify-markdown`, tablas markdown a Slack table blocks nativos, splitting de mensajes largos en chunks de <2900 chars
 
 ## Convenciones
@@ -21,6 +22,8 @@ Bot de Slack que conecta Claude Code con Slack via el Agent SDK. Corre en una VM
 ## SDK
 
 Usa `@anthropic-ai/claude-agent-sdk` (v0.2.x). La funcion principal es `query()` que retorna un `AsyncGenerator<SDKMessage>`.
+
+Catalogo de features del SDK (lo que usamos y lo que no): `docs/agent-sdk/features.md`. Mantenelo actualizado cuando adoptes un feature nuevo.
 
 Tipos de mensajes relevantes:
 - `system` (subtype `init`) — contiene `session_id` y lista de tools
@@ -60,8 +63,10 @@ Logs: `sudo journalctl -u claude-slack-bot -f`
 
 ## Cosas a tener en cuenta
 
-- Sesiones y directorios se pierden con cada restart (estan en memoria)
+- Sesiones y directorios persisten en Firestore (`bot_sessions` + `bot_directories`) — sobreviven restarts. Cache write-through en memoria
 - Los symlinks en `.claude/skills/` deben ser relativos, no absolutos
-- `bypassPermissions` requiere `allowDangerouslySkipPermissions: true`
+- `bypassPermissions` requiere `allowDangerouslySkipPermissions: true`. `disallowedTools` tiene precedencia sobre el bypass
 - `settingSources: ["user", "project", "local"]` necesario para cargar CLAUDE.md y skills del repo
 - La VM tiene 4GB RAM + 2GB swap — queries concurrentes pueden saturarla
+- `cwd` esta restringido a paths bajo `BASE_DIRECTORY` por seguridad
+- Para operar `systemctl` el usuario `nicolas` necesita NOPASSWD en sudoers (ver README)

@@ -1,7 +1,166 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKMessage, Options } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync, existsSync } from "fs";
+import { execSync } from "child_process";
 import { join } from "path";
+import { saveSession, deleteSession, loadAllSessions, logAudit } from "./firestore.js";
+import { sdkToolsServer, sdkToolNames, registerCountsProvider } from "./sdk-tools.js";
+import { getDirectoriesCount } from "./directories.js";
+
+function summarizeToolInput(name: string, input: any): string {
+  if (!input || typeof input !== "object") return "";
+  if (name === "Bash") {
+    const cmd = String(input.command || "");
+    return cmd.length > 120 ? cmd.slice(0, 120) + "..." : cmd;
+  }
+  if (name === "Read" || name === "Edit" || name === "Write") {
+    return String(input.file_path || "");
+  }
+  if (name === "Grep") return `pattern=${input.pattern || ""}`;
+  if (name === "Glob") return `pattern=${input.pattern || ""}`;
+  return JSON.stringify(input).slice(0, 120);
+}
+
+const toolStartTimes = new Map<string, number>();
+
+function makeHooks(conversationKey: string): NonNullable<Options["hooks"]> {
+  const preTool = async (input: any) => {
+    if (input.hook_event_name === "PreToolUse") {
+      const summary = summarizeToolInput(input.tool_name, input.tool_input);
+      console.log(`[tool] ${input.tool_name} ${summary}`);
+      if (input.tool_use_id) toolStartTimes.set(input.tool_use_id, Date.now());
+    }
+    return { continue: true };
+  };
+
+  const postTool = async (input: any) => {
+    if (input.hook_event_name === "PostToolUse") {
+      const start = input.tool_use_id ? toolStartTimes.get(input.tool_use_id) : undefined;
+      const durationMs = start ? Date.now() - start : undefined;
+      if (input.tool_use_id) toolStartTimes.delete(input.tool_use_id);
+      logAudit({
+        conversationKey,
+        tool: input.tool_name,
+        summary: summarizeToolInput(input.tool_name, input.tool_input),
+        ok: true,
+        durationMs,
+        ts: Date.now(),
+      });
+    }
+    return { continue: true };
+  };
+
+  const postToolFailure = async (input: any) => {
+    if (input.hook_event_name === "PostToolUseFailure") {
+      const start = input.tool_use_id ? toolStartTimes.get(input.tool_use_id) : undefined;
+      const durationMs = start ? Date.now() - start : undefined;
+      if (input.tool_use_id) toolStartTimes.delete(input.tool_use_id);
+      console.error(`[tool] FAILED ${input.tool_name}: ${input.error || "unknown"}`);
+      logAudit({
+        conversationKey,
+        tool: input.tool_name,
+        summary: summarizeToolInput(input.tool_name, input.tool_input),
+        ok: false,
+        durationMs,
+        error: String(input.error || "unknown"),
+        ts: Date.now(),
+      });
+    }
+    return { continue: true };
+  };
+
+  const userPromptSubmit = async (input: any) => {
+    if (input.hook_event_name !== "UserPromptSubmit") return { continue: true };
+    const ctx = buildTurnContext(input.cwd);
+    if (!ctx) return { continue: true };
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit" as const,
+        additionalContext: ctx,
+      },
+    };
+  };
+
+  const sessionStart = async (input: any) => {
+    if (input.hook_event_name === "SessionStart") {
+      console.log(`[session] start (source=${input.source || "?"}) key=${conversationKey}`);
+    }
+    return { continue: true };
+  };
+
+  const sessionEnd = async (input: any) => {
+    if (input.hook_event_name === "SessionEnd") {
+      console.log(`[session] end key=${conversationKey} reason=${input.reason || "?"}`);
+    }
+    return { continue: true };
+  };
+
+  const subagentStart = async (input: any) => {
+    if (input.hook_event_name === "SubagentStart") {
+      console.log(`[subagent] start id=${input.agent_id || "?"} type=${input.agent_type || "?"}`);
+    }
+    return { continue: true };
+  };
+
+  const subagentStop = async (input: any) => {
+    if (input.hook_event_name === "SubagentStop") {
+      console.log(`[subagent] stop id=${input.agent_id || "?"}`);
+    }
+    return { continue: true };
+  };
+
+  const notification = async (input: any) => {
+    if (input.hook_event_name === "Notification") {
+      console.log(`[notify] ${input.message || JSON.stringify(input)}`);
+    }
+    return { continue: true };
+  };
+
+  const preCompact = async (input: any) => {
+    if (input.hook_event_name === "PreCompact") {
+      console.log(`[compact] pre-compact for ${conversationKey}, transcript=${input.transcript_path || "?"}`);
+    }
+    return { continue: true };
+  };
+
+  return {
+    PreToolUse: [{ hooks: [preTool] }],
+    PostToolUse: [{ hooks: [postTool] }],
+    PostToolUseFailure: [{ hooks: [postToolFailure] }],
+    UserPromptSubmit: [{ hooks: [userPromptSubmit] }],
+    SessionStart: [{ hooks: [sessionStart] }],
+    SessionEnd: [{ hooks: [sessionEnd] }],
+    SubagentStart: [{ hooks: [subagentStart] }],
+    SubagentStop: [{ hooks: [subagentStop] }],
+    Notification: [{ hooks: [notification] }],
+    PreCompact: [{ hooks: [preCompact] }],
+  };
+}
+
+function buildTurnContext(cwd?: string): string | null {
+  const parts: string[] = [];
+  parts.push(`Current date: ${new Date().toISOString().slice(0, 10)}`);
+  if (cwd) {
+    const branch = safeShell(`git -C ${shellQuote(cwd)} rev-parse --abbrev-ref HEAD`);
+    const dirty = safeShell(`git -C ${shellQuote(cwd)} status --porcelain`);
+    if (branch) parts.push(`Git branch: ${branch}`);
+    if (dirty !== null) parts.push(`Working tree: ${dirty.trim() ? "dirty" : "clean"}`);
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function safeShell(cmd: string): string | null {
+  try {
+    return execSync(cmd, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 1500 }).trim();
+  } catch {
+    return null;
+  }
+}
 
 function loadMcpCredentials(): Record<string, { url: string; accessToken?: string }> {
   const credPath = join(process.env.HOME || "~", ".claude", ".credentials.json");
@@ -38,7 +197,20 @@ interface Session {
 const sessions = new Map<string, Session>();
 const activeAborts = new Map<string, AbortController>();
 
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min
+export const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min
+
+registerCountsProvider(async () => ({
+  sessionCount: sessions.size,
+  directoryCount: getDirectoriesCount(),
+}));
+
+export async function hydrateSessions(): Promise<void> {
+  const persisted = await loadAllSessions(SESSION_TTL_MS);
+  for (const [key, value] of persisted) {
+    sessions.set(key, { sessionId: value.sessionId, lastActivity: value.lastActivity });
+  }
+  console.log(`[firestore] Hydrated ${sessions.size} sessions`);
+}
 
 // Cleanup old sessions every 5 minutes
 setInterval(() => {
@@ -47,6 +219,7 @@ setInterval(() => {
     if (now - session.lastActivity > SESSION_TTL_MS) {
       console.log(`[session] Expired: ${key}`);
       sessions.delete(key);
+      deleteSession(key);
     }
   }
 }, 5 * 60 * 1000);
@@ -78,10 +251,43 @@ export async function* streamClaude(
   const options: Options = {
     cwd,
     abortController,
+    model: "claude-opus-4-7",
+    includePartialMessages: true,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp", "mcp__stitch"],
+    allowedTools: [
+      "Read", "Edit", "Write", "Bash", "Grep", "Glob",
+      "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp", "mcp__stitch",
+      ...sdkToolNames,
+    ],
+    disallowedTools: [
+      "Bash(gcloud projects delete:*)",
+      "Bash(gcloud compute instances delete:*)",
+      "Bash(gcloud sql instances delete:*)",
+      "Bash(gcloud firestore databases delete:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf ~:*)",
+      "Bash(rm -rf /*:*)",
+      "Bash(sudo rm:*)",
+    ],
     maxTurns: 25,
+    maxBudgetUsd: Number(process.env.CLAUDE_MAX_BUDGET_USD || 5),
+    additionalDirectories: (process.env.ADDITIONAL_DIRECTORIES || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    systemPrompt: {
+      type: "preset",
+      preset: "claude_code",
+      append:
+        "Sos un agente operativo corriendo en una VM GCP (us-central1, e2-medium) accedido vía Slack. " +
+        "Respondé en español rioplatense, conciso. " +
+        "Antes de operaciones destructivas (delete, force push, drop), confirmá explícitamente con el usuario. " +
+        "Para info de la propia VM y del bot (CPU/mem/disco de la VM, sesiones activas, status del servicio systemd) usá los tools mcp__bot__* (vm_metrics, bot_status, service_status). " +
+        "Para info y operaciones de GCP (proyectos, instancias, Cloud Run, Cloud SQL, Firestore, IAM, logs en Cloud Logging, etc.) usá `gcloud` vía Bash. Combiná ambos enfoques cuando haga falta. " +
+        "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot.",
+    },
+    hooks: makeHooks(conversationKey),
     settingSources: ["user", "project", "local"],
     plugins: [
       { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
@@ -91,6 +297,7 @@ export async function* streamClaude(
         command: join(process.env.HOME || "~", ".local", "bin", "notebooklm-mcp"),
         args: [] as string[],
       },
+      bot: sdkToolsServer,
       ...Object.fromEntries(
         Object.entries(mcpCredentials)
           .filter(([name]) => name !== "atlassian") // Atlassian handled by plugin
@@ -134,6 +341,7 @@ export async function* streamClaude(
             sessionId,
             lastActivity: Date.now(),
           });
+          saveSession(conversationKey, sessionId);
         }
       }
 
@@ -147,6 +355,7 @@ export async function* streamClaude(
             sessionId,
             lastActivity: Date.now(),
           });
+          saveSession(conversationKey, sessionId);
         }
       }
 

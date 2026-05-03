@@ -1,14 +1,15 @@
 import "dotenv/config";
-import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync } from "fs";
+import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { App } from "@slack/bolt";
-import { streamClaude, abortIfRunning } from "./claude.js";
+import { streamClaude, abortIfRunning, hydrateSessions } from "./claude.js";
 import {
   parseCommand,
   setDirectory,
   getDirectory,
   getSessionKey,
   getDirectoryKey,
+  hydrateDirectories,
 } from "./directories.js";
 import {
   extractText,
@@ -50,6 +51,24 @@ function getDefaultCwd(): string | null {
 
 const TMP_DIR = "/tmp/slack-bot-files";
 mkdirSync(TMP_DIR, { recursive: true });
+
+const TMP_MAX_AGE_MS = 60 * 60 * 1000; // 1h
+setInterval(() => {
+  const cutoff = Date.now() - TMP_MAX_AGE_MS;
+  let removed = 0;
+  try {
+    for (const name of readdirSync(TMP_DIR)) {
+      const full = join(TMP_DIR, name);
+      try {
+        if (statSync(full).mtimeMs < cutoff) {
+          unlinkSync(full);
+          removed++;
+        }
+      } catch {}
+    }
+    if (removed > 0) console.log(`[files] Cleaned ${removed} old tmp files`);
+  } catch {}
+}, 60 * 60 * 1000);
 
 const AUDIO_EXTENSIONS = [".mp3", ".m4a", ".wav", ".ogg", ".webm", ".flac", ".aac", ".mp4"];
 
@@ -303,16 +322,35 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
 
   let lastAssistantText = "";
   let gotResult = false;
+  let partialBuffer = "";
 
   try {
     for await (const message of streamClaude(text, cwd, sessionKey)) {
       const now = Date.now();
+
+      if (message.type === "stream_event") {
+        const ev: any = (message as any).event;
+        if (ev?.type === "content_block_start" && ev.content_block?.type === "text") {
+          partialBuffer = "";
+        } else if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+          partialBuffer += ev.delta.text || "";
+          if (partialBuffer && now - lastUpdate >= UPDATE_INTERVAL) {
+            lastUpdate = now;
+            statusIndex++;
+            const status = PROCESSING_PHRASES[statusIndex % PROCESSING_PHRASES.length];
+            accumulatedText = partialBuffer;
+            await updateWithProcessing(client, channelId, messageTs, accumulatedText, status);
+          }
+        }
+        continue;
+      }
 
       if (message.type === "assistant") {
         const newText = extractText(message as SDKAssistantMessage);
         if (newText) {
           lastAssistantText = newText;
           accumulatedText = newText;
+          partialBuffer = "";
         }
 
         // Update with debounce
@@ -341,12 +379,32 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       if (message.type === "result") {
         gotResult = true;
         const result = message as any;
-        if (result.subtype === "error_result") {
+        if (result.subtype === "error_max_budget_usd") {
+          accumulatedText += `\n\n:moneybag: Budget cap alcanzado ($${result.total_cost_usd?.toFixed?.(4) ?? "?"}). Subí \`CLAUDE_MAX_BUDGET_USD\` si necesitás más.`;
+        } else if (result.subtype === "error_result") {
           accumulatedText += `\n\n:x: Error: ${result.error || "Unknown error"}`;
         }
         if (result.result) {
           accumulatedText = result.result;
         }
+        if (result.modelUsage) {
+          for (const [model, usage] of Object.entries(result.modelUsage as Record<string, any>)) {
+            console.log(`[usage] ${model}: ${JSON.stringify(usage)}`);
+          }
+        }
+        if (typeof result.total_cost_usd === "number") {
+          console.log(`[usage] total_cost_usd=${result.total_cost_usd.toFixed(4)} duration_ms=${result.duration_ms || "?"}`);
+        }
+      }
+
+      if ((message as any).type === "rate_limit_event") {
+        const ev = message as any;
+        console.warn(`[ratelimit] ${JSON.stringify(ev).slice(0, 200)}`);
+      }
+
+      if ((message as any).type === "task_notification" || (message as any).type === "task_progress") {
+        const ev = message as any;
+        console.log(`[task] ${ev.type}: ${JSON.stringify(ev).slice(0, 200)}`);
       }
     }
 
@@ -462,6 +520,7 @@ async function sendFinalResponse(
 
 // Start the app
 (async () => {
+  await Promise.all([hydrateSessions(), hydrateDirectories()]);
   await app.start();
   const authResult = await app.client.auth.test();
   botUserId = authResult.user_id;
