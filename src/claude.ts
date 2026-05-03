@@ -219,16 +219,22 @@ function buildAutoMemoryBlock(memDir: string): string {
   ].join("\n");
 }
 
-function buildSystemPromptAppend(cwd: string): string {
-  const memDir = memoryDirFor(cwd);
-  ensureMemoryDir(memDir);
+const MEMORY_TRIGGER = /\b(record[aá]r?|recuerd[ao]|guard[aá]r?|memori[zc]|memori[ao]|olvid[aá]r?|olvidate|remember|memorize|forget|memory|memo)\b/i;
+
+function buildSystemPromptAppend(cwd: string, prompt: string): string {
   const ops =
     "Sos un agente operativo corriendo en una VM GCP (us-central1, e2-medium) accedido vía Slack. " +
     "Respondé en español rioplatense, conciso. " +
     "Antes de operaciones destructivas (delete, force push, drop), confirmá explícitamente con el usuario. " +
     "Para info de la propia VM y del bot (CPU/mem/disco de la VM, sesiones activas, status del servicio systemd) usá los tools mcp__bot__* (vm_metrics, bot_status, service_status). " +
     "Para info y operaciones de GCP (proyectos, instancias, Cloud Run, Cloud SQL, Firestore, IAM, logs en Cloud Logging, etc.) usá `gcloud` vía Bash. Combiná ambos enfoques cuando haga falta. " +
-    "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot.";
+    "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot. " +
+    "Si el usuario pide guardar/recordar/olvidar algo (palabras como 'recordá', 'guardá', 'memoria', 'olvidá'), seguí las instrucciones de # auto memory que aparecen abajo.";
+
+  if (!MEMORY_TRIGGER.test(prompt)) return ops;
+
+  const memDir = memoryDirFor(cwd);
+  ensureMemoryDir(memDir);
   return ops + "\n" + buildAutoMemoryBlock(memDir);
 }
 
@@ -357,7 +363,7 @@ export async function* streamClaude(
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: buildSystemPromptAppend(cwd),
+      append: buildSystemPromptAppend(cwd, prompt),
     },
     hooks: makeHooks(conversationKey),
     settingSources: ["user", "project", "local"],
