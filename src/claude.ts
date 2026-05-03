@@ -1,6 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKMessage, Options } from "@anthropic-ai/claude-agent-sdk";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, mkdirSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 import { saveSession, deleteSession, loadAllSessions, logAudit } from "./firestore.js";
@@ -154,6 +154,84 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+function memoryDirFor(cwd: string): string {
+  const slug = cwd.replace(/^\//, "").replace(/\//g, "-");
+  return join(process.env.HOME || "/root", ".claude", "projects", `-${slug}`, "memory");
+}
+
+function ensureMemoryDir(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (e: any) {
+    console.error(`[memory] ensureMemoryDir failed: ${e.message}`);
+  }
+}
+
+function loadMemoryIndex(memDir: string): string {
+  try {
+    return readFileSync(join(memDir, "MEMORY.md"), "utf-8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function buildAutoMemoryBlock(memDir: string): string {
+  const index = loadMemoryIndex(memDir);
+  return [
+    "",
+    "# auto memory",
+    "",
+    `You have a persistent, file-based memory system at \`${memDir}\`. This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence). Its contents persist across conversations.`,
+    "",
+    "Build up this memory over time so future conversations have context about who the user is, how to collaborate, and the work history.",
+    "",
+    "## Types of memory",
+    "- **user**: who the user is, role, preferences, knowledge. Save when you learn something stable about them.",
+    "- **feedback**: corrections or validated approaches. Save when the user corrects you OR confirms a non-obvious choice. Include why and how-to-apply.",
+    "- **project**: ongoing work, goals, deadlines, who is doing what. Convert relative dates to absolute (\"Thursday\" → \"2026-05-08\").",
+    "- **reference**: pointers to external systems (Linear projects, Grafana dashboards, internal docs).",
+    "",
+    "## How to save",
+    "Two-step write:",
+    "1. Write the memory to its own file (e.g., `user_role.md`) with frontmatter:",
+    "```",
+    "---",
+    "name: <short name>",
+    "description: <one-line specific description>",
+    "type: user|feedback|project|reference",
+    "---",
+    "<body — for feedback/project, lead with the rule/fact, then **Why:** and **How to apply:** lines>",
+    "```",
+    "2. Add a one-line pointer to `MEMORY.md`: `- [Title](file.md) — one-line hook`. Keep `MEMORY.md` under 200 lines.",
+    "",
+    "## Don't save",
+    "- Code patterns, architecture, file paths (derivable from git)",
+    "- Debug fix recipes (lives in commits)",
+    "- Ephemeral task state (use TodoWrite/plans instead)",
+    "- Anything already in CLAUDE.md",
+    "",
+    "## When to read",
+    "When memories seem relevant or the user references prior work. Verify with current code before acting on a memory — it can be stale. If conflict, trust the code and update the memory.",
+    "",
+    index
+      ? `## Current MEMORY.md\n\`\`\`\n${index.slice(0, 4000)}\n\`\`\``
+      : "## Current MEMORY.md\n(empty — start fresh)",
+  ].join("\n");
+}
+
+function buildSystemPromptAppend(cwd: string): string {
+  const memDir = memoryDirFor(cwd);
+  ensureMemoryDir(memDir);
+  const ops =
+    "Sos un agente operativo corriendo en una VM GCP (us-central1, e2-medium) accedido vía Slack. " +
+    "Respondé en español rioplatense, conciso. " +
+    "Antes de operaciones destructivas (delete, force push, drop), confirmá explícitamente con el usuario. " +
+    "Para info de la propia VM y del bot (CPU/mem/disco de la VM, sesiones activas, status del servicio systemd) usá los tools mcp__bot__* (vm_metrics, bot_status, service_status). " +
+    "Para info y operaciones de GCP (proyectos, instancias, Cloud Run, Cloud SQL, Firestore, IAM, logs en Cloud Logging, etc.) usá `gcloud` vía Bash. Combiná ambos enfoques cuando haga falta. " +
+    "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot.";
+  return ops + "\n" + buildAutoMemoryBlock(memDir);
+}
+
 function safeShell(cmd: string): string | null {
   try {
     return execSync(cmd, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 1500 }).trim();
@@ -279,13 +357,7 @@ export async function* streamClaude(
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append:
-        "Sos un agente operativo corriendo en una VM GCP (us-central1, e2-medium) accedido vía Slack. " +
-        "Respondé en español rioplatense, conciso. " +
-        "Antes de operaciones destructivas (delete, force push, drop), confirmá explícitamente con el usuario. " +
-        "Para info de la propia VM y del bot (CPU/mem/disco de la VM, sesiones activas, status del servicio systemd) usá los tools mcp__bot__* (vm_metrics, bot_status, service_status). " +
-        "Para info y operaciones de GCP (proyectos, instancias, Cloud Run, Cloud SQL, Firestore, IAM, logs en Cloud Logging, etc.) usá `gcloud` vía Bash. Combiná ambos enfoques cuando haga falta. " +
-        "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot.",
+      append: buildSystemPromptAppend(cwd),
     },
     hooks: makeHooks(conversationKey),
     settingSources: ["user", "project", "local"],
