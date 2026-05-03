@@ -3,6 +3,7 @@ import { z } from "zod";
 import { execSync } from "child_process";
 import os from "os";
 import { statfsSync } from "fs";
+import { getCostSummary, getTopCostConversations } from "./cost.js";
 
 const botStartTime = Date.now();
 
@@ -93,6 +94,17 @@ const serviceStatus = tool(
   }
 );
 
+const costStats = tool(
+  "cost_stats",
+  "Get bot Anthropic API cost stats: total spent across all conversations (persisted in Firestore), spend since current boot, and top conversations by cost.",
+  { limit: z.number().int().positive().max(50).optional().describe("Max conversations to list (default 10)") },
+  async ({ limit }) => {
+    const summary = getCostSummary();
+    const top = getTopCostConversations(limit ?? 10);
+    return ok(JSON.stringify({ ...summary, top_conversations: top }, null, 2));
+  }
+);
+
 let getCounts: () => Promise<{ sessionCount: number; directoryCount: number }> = async () => ({
   sessionCount: 0,
   directoryCount: 0,
@@ -105,7 +117,12 @@ export function registerCountsProvider(fn: typeof getCounts): void {
 export const sdkToolsServer = createSdkMcpServer({
   name: "bot",
   version: "1.0.0",
-  tools: [botStatus, vmMetrics, serviceStatus],
+  tools: [botStatus, vmMetrics, serviceStatus, costStats],
 });
 
-export const sdkToolNames = ["mcp__bot__bot_status", "mcp__bot__vm_metrics", "mcp__bot__service_status"];
+export const sdkToolNames = [
+  "mcp__bot__bot_status",
+  "mcp__bot__vm_metrics",
+  "mcp__bot__service_status",
+  "mcp__bot__cost_stats",
+];

@@ -23,10 +23,10 @@ Markers: ✅ en uso · 🟡 planeado · ⬜ no usado · ⚠️ preview/inestable
 | ✅ `mcpServers` stdio + http (creds desde `~/.claude/.credentials.json`) | `src/claude.ts` |
 | ✅ `AbortController` para cancelar | `src/claude.ts` |
 | ✅ `maxTurns: 25` | `src/claude.ts` |
-| ✅ `maxBudgetUsd` (env `CLAUDE_MAX_BUDGET_USD`, default 5) | `src/claude.ts` |
+| ⬜ `maxBudgetUsd` — removido (no necesario por ahora; tracking de costo via `mcp__bot__cost_stats` + Firestore `bot_costs`) | — |
 | ✅ `additionalDirectories` (env `ADDITIONAL_DIRECTORIES`, csv) | `src/claude.ts` |
 | ✅ `systemPrompt` preset+append | `src/claude.ts` |
-| ✅ Custom tools `mcp__bot__*` (bot_status, vm_metrics, service_status) | `src/sdk-tools.ts` |
+| ✅ Custom tools `mcp__bot__*` (bot_status, vm_metrics, service_status, cost_stats) | `src/sdk-tools.ts` |
 | ✅ Hook `PostToolUse` → audit log Firestore | `src/claude.ts`, `src/firestore.ts` |
 | ✅ Hook `PostToolUseFailure` → log + audit | `src/claude.ts` |
 | ✅ Hook `UserPromptSubmit` → inyecta date+branch+dirty | `src/claude.ts` |
@@ -93,11 +93,11 @@ Definir `code-reviewer` (Sonnet, read-only), `test-runner` (Bash), `deployer` (g
 Cuando un subagent termina, postear progress a Slack en thread.
 - **Esfuerzo:** S.
 
-### ✅ `maxBudgetUsd`
+### ⬜ `maxBudgetUsd`
 Cap de gasto por query. Devuelve subtype `error_max_budget_usd`.
-- **Por qué:** Opus 4.7 + bypassPermissions + bucle infinito = factura sorpresa. Cap protege.
+- **Estado:** removido. Hoy trackeamos costo acumulado por conversación en Firestore (`bot_costs`) y exponemos `mcp__bot__cost_stats` para que el bot se consulte. Reactivar si aparece riesgo de loops infinitos.
 - **Doc:** https://code.claude.com/docs/en/agent-sdk/cost-tracking
-- **Esfuerzo:** S (1 línea + branch en error handling).
+- **Esfuerzo:** S.
 
 ### ✅ `modelUsage` per-modelo en `result`
 Si adoptamos subagents, esto da breakdown Opus/Sonnet por turno → Slack o Firestore.

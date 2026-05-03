@@ -4,6 +4,7 @@ const db = new Firestore();
 
 const SESSIONS = "bot_sessions";
 const DIRECTORIES = "bot_directories";
+const COSTS = "bot_costs";
 
 export interface PersistedSession {
   sessionId: string;
@@ -86,6 +87,34 @@ export interface AuditEntry {
   durationMs?: number;
   error?: string;
   ts: number;
+}
+
+export interface PersistedCost {
+  totalUsd: number;
+  turnCount: number;
+  lastTurnUsd: number;
+  lastTurnAt: number;
+}
+
+export async function loadAllCosts(): Promise<Map<string, PersistedCost>> {
+  const result = new Map<string, PersistedCost>();
+  try {
+    const snap = await db.collection(COSTS).get();
+    snap.forEach((doc) => {
+      const data = doc.data() as PersistedCost;
+      if (typeof data.totalUsd === "number") result.set(doc.id, data);
+    });
+  } catch (e: any) {
+    console.error(`[firestore] loadAllCosts failed:`, e.message);
+  }
+  return result;
+}
+
+export function saveCost(key: string, cost: PersistedCost): void {
+  db.collection(COSTS)
+    .doc(key)
+    .set(cost)
+    .catch((e) => console.error(`[firestore] saveCost ${key} failed:`, e.message));
 }
 
 export function logAudit(entry: AuditEntry): void {

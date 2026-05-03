@@ -355,7 +355,6 @@ export async function* streamClaude(
       "Bash(sudo rm:*)",
     ],
     maxTurns: 25,
-    maxBudgetUsd: Number(process.env.CLAUDE_MAX_BUDGET_USD || 5),
     additionalDirectories: (process.env.ADDITIONAL_DIRECTORIES || "")
       .split(",")
       .map((s) => s.trim())

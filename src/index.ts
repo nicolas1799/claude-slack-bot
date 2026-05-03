@@ -3,6 +3,7 @@ import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync, unlinkSy
 import { join } from "path";
 import { App } from "@slack/bolt";
 import { streamClaude, hydrateSessions } from "./claude.js";
+import { hydrateCosts, recordTurnCost } from "./cost.js";
 import {
   parseCommand,
   setDirectory,
@@ -389,9 +390,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
 
       if (message.type === "result") {
         const result = message as any;
-        if (result.subtype === "error_max_budget_usd") {
-          accumulatedText += `\n\n:moneybag: Budget cap alcanzado ($${result.total_cost_usd?.toFixed?.(4) ?? "?"}). Subí \`CLAUDE_MAX_BUDGET_USD\` si necesitás más.`;
-        } else if (result.subtype === "error_result") {
+        if (result.subtype === "error_result") {
           accumulatedText += `\n\n:x: Error: ${result.error || "Unknown error"}`;
         }
         if (result.result) accumulatedText = result.result;
@@ -402,6 +401,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
         }
         if (typeof result.total_cost_usd === "number") {
           console.log(`[usage] total_cost_usd=${result.total_cost_usd.toFixed(4)} duration_ms=${result.duration_ms || "?"}`);
+          recordTurnCost(sessionKey, result.total_cost_usd);
         }
         continue;
       }
@@ -468,7 +468,7 @@ async function postFinalResponse(
 
 // Start the app
 (async () => {
-  await Promise.all([hydrateSessions(), hydrateDirectories()]);
+  await Promise.all([hydrateSessions(), hydrateDirectories(), hydrateCosts()]);
   await app.start();
   const authResult = await app.client.auth.test();
   botUserId = authResult.user_id;
