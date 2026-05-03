@@ -2,7 +2,7 @@ import "dotenv/config";
 import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { App } from "@slack/bolt";
-import { streamClaude, abortIfRunning, hydrateSessions } from "./claude.js";
+import { streamClaude, hydrateSessions } from "./claude.js";
 import {
   parseCommand,
   setDirectory,
@@ -29,7 +29,6 @@ for (const key of required) {
 }
 
 const BASE_DIRECTORY = process.env.BASE_DIRECTORY!;
-const SLACK_BLOCK_LIMIT = 2900;
 
 function listRepos(): string[] {
   try {
@@ -180,6 +179,33 @@ const app = new App({
 let botUserId: string | undefined;
 
 // Handle DMs
+async function addReaction(client: any, channel: string, timestamp: string, name: string) {
+  try {
+    await client.reactions.add({ name, channel, timestamp });
+  } catch (e: any) {
+    const code = e.data?.error || e.message || "";
+    if (!String(code).includes("already_reacted")) {
+      console.error(`[react] add ${name} failed: ${code}`);
+    }
+  }
+}
+
+async function removeReaction(client: any, channel: string, timestamp: string, name: string) {
+  try {
+    await client.reactions.remove({ name, channel, timestamp });
+  } catch (e: any) {
+    const code = e.data?.error || e.message || "";
+    if (!String(code).includes("no_reaction")) {
+      console.error(`[react] remove ${name} failed: ${code}`);
+    }
+  }
+}
+
+const REACT_THINKING = "hourglass_flowing_sand";
+const REACT_DONE = "white_check_mark";
+const REACT_ERROR = "x";
+const REACT_CANCELLED = "double_vertical_bar";
+
 app.message(async ({ message, say, client }) => {
   const msg = message as any;
   // Allow file_share subtype, ignore others
@@ -190,6 +216,8 @@ app.message(async ({ message, say, client }) => {
   const channelId = msg.channel;
   const userId = msg.user;
   const threadTs = msg.thread_ts;
+
+  await addReaction(client, channelId, msg.ts, REACT_THINKING);
 
   // Download attached files
   if (msg.files && msg.files.length > 0) {
@@ -207,6 +235,8 @@ app.event("app_mention", async ({ event, say, client }) => {
   let text = (event.text || "")
     .replace(/<@[A-Z0-9]+>/g, "")
     .trim();
+
+  await addReaction(client, event.channel, event.ts, REACT_THINKING);
 
   // Download attached files
   const eventFiles = (event as any).files;
@@ -238,32 +268,14 @@ interface HandleMessageParams {
   client: any;
 }
 
-const PROCESSING_PHRASES = [
-  "Processing...",
-  "Exploring the codebase...",
-  "Reading files...",
-  "Analyzing the code...",
-  "Putting it all together...",
-  "Almost there...",
-];
-
-function buildProcessingBlocks(status: string): any[] {
-  return [
-    {
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: `_${status}_`,
-        },
-      ],
-    },
-  ];
-}
-
 async function handleMessage({ text, channelId, userId, threadTs, ts, say, client }: HandleMessageParams) {
   const sessionKey = getSessionKey(channelId, threadTs, userId);
   const dirKey = getDirectoryKey(channelId, threadTs, userId);
+
+  const finalize = async (reaction: string) => {
+    await removeReaction(client, channelId, ts, REACT_THINKING);
+    await addReaction(client, channelId, ts, reaction);
+  };
 
   // Handle cwd commands
   const command = parseCommand(text);
@@ -274,6 +286,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
         ? `Working directory: \`${dir}\``
         : "No working directory set. Use `cwd <repo-name>` to set one.";
       await say({ text: response, thread_ts: threadTs || ts });
+      await finalize(REACT_DONE);
       return;
     }
 
@@ -282,6 +295,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       ? `Working directory set: \`${result.resolved}\``
       : result.error;
     await say({ text: response, thread_ts: threadTs || ts });
+    await finalize(result.ok ? REACT_DONE : REACT_ERROR);
     return;
   }
 
@@ -297,6 +311,7 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
       const repos = listRepos();
       if (repos.length === 0) {
         await say({ text: "No repos found in `" + BASE_DIRECTORY + "`.", thread_ts: threadTs || ts });
+        await finalize(REACT_ERROR);
         return;
       }
       // Multiple repos — prepend context to the prompt so Claude picks the right one
@@ -306,87 +321,24 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
     }
   }
 
-  // Post initial processing message with context block
-  const thinkingResponse = await client.chat.postMessage({
-    channel: channelId,
-    text: "Processing...",
-    blocks: buildProcessingBlocks("Processing..."),
-    thread_ts: threadTs || ts,
-  });
-
-  const messageTs = thinkingResponse.ts!;
   let accumulatedText = "";
-  let lastUpdate = 0;
-  let statusIndex = 0;
-  const UPDATE_INTERVAL = 1500;
-
-  let lastAssistantText = "";
-  let gotResult = false;
-  let partialBuffer = "";
 
   try {
     for await (const message of streamClaude(text, cwd, sessionKey)) {
-      const now = Date.now();
-
-      if (message.type === "stream_event") {
-        const ev: any = (message as any).event;
-        if (ev?.type === "content_block_start" && ev.content_block?.type === "text") {
-          partialBuffer = "";
-        } else if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
-          partialBuffer += ev.delta.text || "";
-          if (partialBuffer && now - lastUpdate >= UPDATE_INTERVAL) {
-            lastUpdate = now;
-            statusIndex++;
-            const status = PROCESSING_PHRASES[statusIndex % PROCESSING_PHRASES.length];
-            accumulatedText = partialBuffer;
-            await updateWithProcessing(client, channelId, messageTs, accumulatedText, status);
-          }
-        }
+      if (message.type === "assistant") {
+        const newText = extractText(message as SDKAssistantMessage);
+        if (newText) accumulatedText = newText;
         continue;
       }
 
-      if (message.type === "assistant") {
-        const newText = extractText(message as SDKAssistantMessage);
-        if (newText) {
-          lastAssistantText = newText;
-          accumulatedText = newText;
-          partialBuffer = "";
-        }
-
-        // Update with debounce
-        if (now - lastUpdate >= UPDATE_INTERVAL) {
-          lastUpdate = now;
-          statusIndex++;
-          const status = PROCESSING_PHRASES[statusIndex % PROCESSING_PHRASES.length];
-
-          if (accumulatedText) {
-            // Show text + processing indicator so user knows it's still working
-            await updateWithProcessing(client, channelId, messageTs, accumulatedText, status);
-          } else {
-            // No text yet, just show processing
-            try {
-              await client.chat.update({
-                channel: channelId,
-                ts: messageTs,
-                text: status,
-                blocks: buildProcessingBlocks(status),
-              });
-            } catch (_) {}
-          }
-        }
-      }
-
       if (message.type === "result") {
-        gotResult = true;
         const result = message as any;
         if (result.subtype === "error_max_budget_usd") {
           accumulatedText += `\n\n:moneybag: Budget cap alcanzado ($${result.total_cost_usd?.toFixed?.(4) ?? "?"}). Subí \`CLAUDE_MAX_BUDGET_USD\` si necesitás más.`;
         } else if (result.subtype === "error_result") {
           accumulatedText += `\n\n:x: Error: ${result.error || "Unknown error"}`;
         }
-        if (result.result) {
-          accumulatedText = result.result;
-        }
+        if (result.result) accumulatedText = result.result;
         if (result.modelUsage) {
           for (const [model, usage] of Object.entries(result.modelUsage as Record<string, any>)) {
             console.log(`[usage] ${model}: ${JSON.stringify(usage)}`);
@@ -395,125 +347,63 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
         if (typeof result.total_cost_usd === "number") {
           console.log(`[usage] total_cost_usd=${result.total_cost_usd.toFixed(4)} duration_ms=${result.duration_ms || "?"}`);
         }
+        continue;
       }
 
       if ((message as any).type === "rate_limit_event") {
-        const ev = message as any;
-        console.warn(`[ratelimit] ${JSON.stringify(ev).slice(0, 200)}`);
+        console.warn(`[ratelimit] ${JSON.stringify(message).slice(0, 200)}`);
+        continue;
       }
 
       if ((message as any).type === "task_notification" || (message as any).type === "task_progress") {
-        const ev = message as any;
-        console.log(`[task] ${ev.type}: ${JSON.stringify(ev).slice(0, 200)}`);
+        console.log(`[task] ${(message as any).type}: ${JSON.stringify(message).slice(0, 200)}`);
+        continue;
       }
     }
 
-    // Final update
     if (accumulatedText) {
-      await sendFinalResponse(client, channelId, messageTs, threadTs || ts, accumulatedText);
-      // Send a short new message to trigger notification
-      try {
-        await client.chat.postMessage({
-          channel: channelId,
-          text: ":white_check_mark: Done.",
-          thread_ts: threadTs || ts,
-        });
-      } catch (_) {}
+      await postFinalResponse(client, channelId, threadTs || ts, accumulatedText);
+      await finalize(REACT_DONE);
     } else {
-      await updateSlackMessage(client, channelId, messageTs, ":warning: No response received.");
+      await client.chat.postMessage({
+        channel: channelId,
+        text: ":warning: No response received.",
+        thread_ts: threadTs || ts,
+      });
+      await finalize(REACT_ERROR);
     }
   } catch (error: any) {
     console.error("Error in Claude query:", error);
-    const errorText = error.name === "AbortError"
-      ? ":stop_sign: Cancelled."
+    const isAbort = error.name === "AbortError";
+    const errorText = isAbort
+      ? ":double_vertical_bar: Cancelado."
       : `:x: Error: ${error.message || "Unknown error"}`;
-    await updateSlackMessage(client, channelId, messageTs, errorText);
-  }
-}
-
-async function updateWithProcessing(
-  client: any,
-  channel: string,
-  ts: string,
-  text: string,
-  status: string,
-) {
-  try {
-    const formatted = formatForSlack(text);
-    const truncated = formatted.length > SLACK_BLOCK_LIMIT
-      ? formatted.slice(0, SLACK_BLOCK_LIMIT - 50) + "\n..."
-      : formatted;
-    await client.chat.update({
-      channel,
-      ts,
-      text: truncated,
-      blocks: [
-        { type: "section", text: { type: "mrkdwn", text: truncated } },
-        { type: "context", elements: [{ type: "mrkdwn", text: `_${status}_` }] },
-      ],
+    await client.chat.postMessage({
+      channel: channelId,
+      text: errorText,
+      thread_ts: threadTs || ts,
     });
-  } catch (e: any) {
-    console.error("Failed to update message with processing:", e.message);
+    await finalize(isAbort ? REACT_CANCELLED : REACT_ERROR);
   }
 }
 
-async function updateSlackMessage(
+async function postFinalResponse(
   client: any,
   channel: string,
-  ts: string,
-  text: string,
-) {
-  try {
-    const formatted = formatForSlack(text);
-    // Always use blocks for proper mrkdwn rendering
-    // Truncate to fit within a single block during streaming
-    const truncated = formatted.length > SLACK_BLOCK_LIMIT
-      ? formatted.slice(0, SLACK_BLOCK_LIMIT - 50) + "\n\n_...writing..._"
-      : formatted;
-    await client.chat.update({
-      channel,
-      ts,
-      text: truncated,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: truncated } }],
-    });
-  } catch (e: any) {
-    console.error("Failed to update Slack message:", e.message);
-  }
-}
-
-async function sendFinalResponse(
-  client: any,
-  channel: string,
-  messageTs: string,
   threadTs: string,
-  text: string
+  text: string,
 ) {
   const chunks = splitMessage(formatForSlack(text));
-
-  // Update the original message with the first chunk
-  const firstFormatted = formatForSlack(chunks[0]);
-  try {
-    await client.chat.update({
-      channel,
-      ts: messageTs,
-      text: firstFormatted,
-      blocks: textToBlocks(firstFormatted),
-    });
-  } catch (e: any) {
-    console.error("Failed to update final message:", e.message);
-  }
-
-  // Post additional chunks as new messages in the thread
-  for (let i = 1; i < chunks.length; i++) {
+  for (const chunk of chunks) {
     try {
       await client.chat.postMessage({
         channel,
-        text: chunks[i],
-        blocks: textToBlocks(chunks[i]),
+        text: chunk,
+        blocks: textToBlocks(chunk),
         thread_ts: threadTs,
       });
     } catch (e: any) {
-      console.error("Failed to post continuation message:", e.message);
+      console.error("Failed to post response chunk:", e.message);
     }
   }
 }
