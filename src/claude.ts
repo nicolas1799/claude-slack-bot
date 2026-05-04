@@ -4,7 +4,7 @@ import { readFileSync, existsSync, mkdirSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 import { saveSession, deleteSession, loadAllSessions, logAudit } from "./firestore.js";
-import { sdkToolsServer, sdkToolNames, registerCountsProvider } from "./sdk-tools.js";
+import { createBotServer, sdkToolNames, registerCountsProvider } from "./sdk-tools.js";
 import { getDirectoriesCount } from "./directories.js";
 
 function summarizeToolInput(name: string, input: any): string {
@@ -375,7 +375,7 @@ export async function* streamClaude(
         command: join(process.env.HOME || "~", ".local", "bin", "notebooklm-mcp"),
         args: [] as string[],
       },
-      bot: sdkToolsServer,
+      bot: createBotServer(),
       ...Object.fromEntries(
         Object.entries(mcpCredentials)
           .filter(([name]) => name !== "atlassian") // Atlassian handled by plugin

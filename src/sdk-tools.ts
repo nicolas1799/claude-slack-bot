@@ -181,11 +181,18 @@ export function registerCountsProvider(fn: typeof getCounts): void {
   getCounts = fn;
 }
 
-export const sdkToolsServer = createSdkMcpServer({
-  name: "bot",
-  version: "1.0.0",
-  tools: [botStatus, vmMetrics, serviceStatus, costStats, scheduleCreate, scheduleList, scheduleDelete],
-});
+const botTools = [botStatus, vmMetrics, serviceStatus, costStats, scheduleCreate, scheduleList, scheduleDelete];
+
+// Each query() needs its own server instance — the in-process MCP transport
+// throws "Already connected to a transport" if a single server is connected
+// from two concurrent queries (e.g. a channel mention + a DM at the same time).
+export function createBotServer() {
+  return createSdkMcpServer({
+    name: "bot",
+    version: "1.0.0",
+    tools: botTools,
+  });
+}
 
 export const sdkToolNames = [
   "mcp__bot__bot_status",
