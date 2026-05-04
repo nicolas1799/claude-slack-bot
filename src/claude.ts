@@ -282,7 +282,7 @@ interface Session {
 const sessions = new Map<string, Session>();
 const activeAborts = new Map<string, AbortController>();
 
-export const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 registerCountsProvider(async () => ({
   sessionCount: sessions.size,
