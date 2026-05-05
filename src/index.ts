@@ -473,6 +473,23 @@ async function postFinalResponse(
   }
 }
 
+// SDK fires "Operation aborted" rejections from internal control_request handlers when a query
+// is aborted mid-flight (e.g. abortIfRunning fires while an MCP tool call is in progress).
+// Those rejections aren't awaited anywhere in user code, so without this handler Node 20 kills
+// the process. Log everything else loudly so we don't swallow real bugs.
+process.on("unhandledRejection", (reason: any) => {
+  const msg = reason?.message || String(reason);
+  if (msg.includes("Operation aborted")) {
+    console.warn(`[unhandledRejection] swallowed expected abort: ${msg}`);
+    return;
+  }
+  console.error("[unhandledRejection]", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+});
+
 // Start the app
 (async () => {
   await Promise.all([hydrateSessions(), hydrateDirectories(), hydrateCosts()]);
