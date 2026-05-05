@@ -355,7 +355,7 @@ export async function* streamClaude(
       "Bash(rm -rf /*:*)",
       "Bash(sudo rm:*)",
     ],
-    maxTurns: 25,
+    maxTurns: 100,
     additionalDirectories: (process.env.ADDITIONAL_DIRECTORIES || "")
       .split(",")
       .map((s) => s.trim())

@@ -399,6 +399,9 @@ async function handleMessage({ text, channelId, userId, threadTs, ts, say, clien
         if (result.subtype === "error_result") {
           accumulatedText += `\n\n:x: Error: ${result.error || "Unknown error"}`;
         }
+        if (result.subtype === "error_max_turns") {
+          accumulatedText += `\n\n:warning: Se acabaron los turnos (${result.num_turns}/100). Mandame "continuá" si querés que siga.`;
+        }
         if (result.result) accumulatedText = result.result;
         if (result.modelUsage) {
           for (const [model, usage] of Object.entries(result.modelUsage as Record<string, any>)) {
