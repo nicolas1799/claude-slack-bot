@@ -6,7 +6,7 @@ Bot de Slack que conecta Claude Code con Slack via el Agent SDK. Corre en una VM
 
 5 archivos en `src/`:
 - `index.ts` — Bolt app (Socket Mode), event handlers para DMs y @mentions, descarga de archivos, transcripcion de audio via Groq, manejo de stream_event partials
-- `claude.ts` — Wrapper del SDK `query()`, manejo de sesiones por conversacion, carga de MCP credentials desde `~/.claude/.credentials.json`, configuracion de plugins y MCP servers, hook PreToolUse, modelo Opus 4.7 fijo, denylist
+- `claude.ts` — Wrapper del SDK `query()`, manejo de sesiones por conversacion, carga de MCP credentials desde `~/.claude/.credentials.json`, configuracion de plugins y MCP servers, hook PreToolUse, modelo Opus 4.8 fijo, denylist
 - `directories.ts` — Manejo de `cwd` por conversacion. DMs comparten directorio, threads en canales pueden tener cwd independiente con fallback al canal. Restringe paths a `BASE_DIRECTORY`
 - `firestore.ts` — Persistencia de sesiones y cwd via `@google-cloud/firestore` (ADC). Hidratacion al boot, write-through cache
 - `format.ts` — Conversion de markdown a Slack mrkdwn usando `slackify-markdown`, tablas markdown a Slack table blocks nativos, splitting de mensajes largos en chunks de <2900 chars
