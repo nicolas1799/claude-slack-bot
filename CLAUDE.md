@@ -37,7 +37,7 @@ Tipos de mensajes relevantes:
 - **Atlassian**: via plugin local (`~/.claude/plugins/cache/atlassian/`)
 - **Supabase**: via HTTP MCP con Bearer token desde credentials
 - **NotebookLM**: via stdio MCP (`notebooklm-mcp` instalado con `uv`)
-- **Notion**: credentials cargadas pero no configurado como server aun
+- **Notion**: via CLI `ntn` (no MCP). Binario en `~/.local/bin/ntn`, auth headless con `NOTION_API_TOKEN` (internal integration token) en `.env`. El bot lo usa por Bash (`ntn api ...`, `ntn pages create`). Decisión: evita el overhead de schemas del MCP en cada query y el OAuth-refresh. La integración solo accede a páginas compartidas explícitamente con ella en Notion
 
 Las credenciales OAuth se leen de `~/.claude/.credentials.json` al inicio. Si un token expira, hay que re-autenticar desde la maquina local y copiar el archivo con `gcloud compute scp`.
 
