@@ -34,7 +34,7 @@ Tipos de mensajes relevantes:
 
 ## MCP Servers
 
-- **Atlassian**: via plugin local (`~/.claude/plugins/cache/atlassian/`)
+- **Jira/Confluence**: via CLI `acli` (no MCP). Binario oficial de Atlassian en `~/.local/bin/acli`, auth headless con API token (`acli jira auth login --token`, persistente en disco). El bot lo usa por Bash (`acli jira workitem search/view/create/transition/comment`, agregar `--json` para parsear). Decisión: el plugin OAuth se vaciaba sin auto-refresh y dejaba al bot sin Jira; el API token no expira como el OAuth y la auth es headless (sin browser). Credenciales de re-login en `.env` (`ATLASSIAN_*`). Procedimiento en `docs/atlassian-auth.md`
 - **Supabase**: via HTTP MCP con Bearer token desde credentials
 - **NotebookLM**: via stdio MCP (`notebooklm-mcp` instalado con `uv`). Auth = cookies de sesión de Google en `~/.notebooklm-mcp-cli/profiles/default/`. `nlm login` necesita navegador, así que no se puede autenticar headless en la VM: se renueva en local y se copian los archivos con `gcloud compute scp`. Procedimiento en `docs/notebooklm-auth.md`
 - **Notion**: via CLI `ntn` (no MCP). Binario en `~/.local/bin/ntn`, auth headless con `NOTION_API_TOKEN` (internal integration token) en `.env`. El bot lo usa por Bash (`ntn api ...`, `ntn pages create`). Decisión: evita el overhead de schemas del MCP en cada query y el OAuth-refresh. La integración solo accede a páginas compartidas explícitamente con ella en Notion

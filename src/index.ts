@@ -192,7 +192,6 @@ function prettyToolStatus(name: string): string {
   if (name === "WebSearch") return "Buscando en la web";
   if (name === "Task") return "Delegando a subagente";
   if (name === "TodoWrite") return "Actualizando tareas";
-  if (name.startsWith("mcp__atlassian")) return "Consultando Atlassian";
   if (name.startsWith("mcp__supabase")) return "Consultando Supabase";
   if (name.startsWith("mcp__notebooklm")) return "Consultando NotebookLM";
   if (name.startsWith("mcp__stitch")) return "Generando diseño";

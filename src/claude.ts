@@ -229,6 +229,7 @@ function buildSystemPromptAppend(cwd: string, prompt: string): string {
     "Para info de la propia VM y del bot (CPU/mem/disco de la VM, sesiones activas, status del servicio systemd) usá los tools mcp__bot__* (vm_metrics, bot_status, service_status). " +
     "Para info y operaciones de GCP (proyectos, instancias, Cloud Run, Cloud SQL, Firestore, IAM, logs en Cloud Logging, etc.) usá `gcloud` vía Bash. Combiná ambos enfoques cuando haga falta. " +
     "Para Notion usá el CLI `ntn` vía Bash (no hay MCP de Notion). El token ya está en el entorno (NOTION_API_TOKEN). Comandos: `ntn api <endpoint>` para la REST API (ej. `ntn api /v1/search -X POST -d '{...}'`), `ntn pages create` para crear páginas desde Markdown. La integración solo ve páginas/DBs que le fueron compartidas explícitamente en Notion. " +
+    "Para Jira y Confluence usá el CLI `acli` vía Bash (no hay MCP de Atlassian). Ya está autenticado en la VM contra el sitio myncreations.atlassian.net (auth por API token, persistente). Comandos clave: `acli jira workitem search --jql \"...\"` para buscar issues, `acli jira workitem view <KEY>` para ver uno, `acli jira workitem create --project <KEY> --type <Tipo> --summary \"...\"` para crear, `acli jira workitem transition --key <KEY> --status \"...\"` para mover de estado, `acli jira workitem comment --key <KEY> --body \"...\"` para comentar. Agregá `--json` cuando exista para parsear la salida en vez de leer la tabla ANSI. Proyectos: GDT, LEG, QUOTE. " +
     "Para deploys del propio bot: cd al cwd del repo, git pull, npx tsc, sudo systemctl restart claude-slack-bot. " +
     "Si el usuario pide chequeos recurrentes ('cada N minutos revisá X', 'avisame cuando termine Y', 'recordame en X minutos'), usá mcp__bot__schedule_create — corre prompts en este mismo thread cada intervalo. Cuando la condición a esperar se cumpla, el run programado debe llamar mcp__bot__schedule_delete con su jobId para parar. Para listar/cancelar: mcp__bot__schedule_list / schedule_delete. Cap 10 jobs activos, mín 30s, máx 24h. " +
     "Si el usuario pide guardar/recordar/olvidar algo (palabras como 'recordá', 'guardá', 'memoria', 'olvidá'), seguí las instrucciones de # auto memory que aparecen abajo.";
@@ -343,7 +344,7 @@ export async function* streamClaude(
     allowDangerouslySkipPermissions: true,
     allowedTools: [
       "Read", "Edit", "Write", "Bash", "Grep", "Glob",
-      "mcp__atlassian", "mcp__supabase", "mcp__notebooklm-mcp", "mcp__stitch",
+      "mcp__supabase", "mcp__notebooklm-mcp", "mcp__stitch",
       ...sdkToolNames,
     ],
     disallowedTools: [
@@ -368,9 +369,6 @@ export async function* streamClaude(
     },
     hooks: makeHooks(conversationKey),
     settingSources: ["user", "project", "local"],
-    plugins: [
-      { type: "local" as const, path: join(process.env.HOME || "~", ".claude", "plugins", "cache", "atlassian", "atlassian", "1.0.0") },
-    ],
     mcpServers: {
       "notebooklm-mcp": {
         command: join(process.env.HOME || "~", ".local", "bin", "notebooklm-mcp"),
@@ -379,7 +377,6 @@ export async function* streamClaude(
       bot: createBotServer(),
       ...Object.fromEntries(
         Object.entries(mcpCredentials)
-          .filter(([name]) => name !== "atlassian") // Atlassian handled by plugin
           .map(([name, cred]) => [
             name,
             {
