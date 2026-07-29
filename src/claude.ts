@@ -338,7 +338,7 @@ export async function* streamClaude(
   const options: Options = {
     cwd,
     abortController,
-    model: "claude-opus-4-8",
+    model: "claude-opus-5",
     includePartialMessages: true,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
