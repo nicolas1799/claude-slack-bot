@@ -21,7 +21,11 @@ Bot de Slack que conecta Claude Code con Slack via el Agent SDK. Corre en una VM
 
 ## SDK
 
-Usa `@anthropic-ai/claude-agent-sdk` (v0.2.x). La funcion principal es `query()` que retorna un `AsyncGenerator<SDKMessage>`.
+Usa `@anthropic-ai/claude-agent-sdk` (v0.3.x). La funcion principal es `query()` que retorna un `AsyncGenerator<SDKMessage>`.
+
+Desde 0.3.x el CLI ya no viene como `cli.js` dentro del paquete: es un binario por plataforma en un `optionalDependency` (`@anthropic-ai/claude-agent-sdk-linux-x64`, ~275 MB). Dos consecuencias:
+- El disco de la VM tiene que tener espacio antes de un `npm install`, o npm saltea el optional y las queries mueren con `exited with code 1`.
+- Actualizar el SDK **requiere reiniciar el servicio**. El proceso viejo mantiene el `sdk.mjs` anterior en memoria pero los archivos en disco ya cambiaron, y spawnea un CLI en una ruta que ya no existe.
 
 Catalogo de features del SDK (lo que usamos y lo que no): `docs/agent-sdk/features.md`. Mantenelo actualizado cuando adoptes un feature nuevo.
 
@@ -39,7 +43,27 @@ Tipos de mensajes relevantes:
 - **NotebookLM**: via stdio MCP (`notebooklm-mcp` instalado con `uv`). Auth = cookies de sesión de Google en `~/.notebooklm-mcp-cli/profiles/default/`. `nlm login` necesita navegador, así que no se puede autenticar headless en la VM: se renueva en local y se copian los archivos con `gcloud compute scp`. Procedimiento en `docs/notebooklm-auth.md`
 - **Notion**: via CLI `ntn` (no MCP). Binario en `~/.local/bin/ntn`, auth headless con `NOTION_API_TOKEN` (internal integration token) en `.env`. El bot lo usa por Bash (`ntn api ...`, `ntn pages create`). Decisión: evita el overhead de schemas del MCP en cada query y el OAuth-refresh. La integración solo accede a páginas compartidas explícitamente con ella en Notion
 
-Las credenciales OAuth se leen de `~/.claude/.credentials.json` al inicio. Si un token expira, hay que re-autenticar desde la maquina local y copiar el archivo con `gcloud compute scp`.
+Las credenciales OAuth de los MCP se leen de `~/.claude/.credentials.json` al inicio. Si un token expira, hay que re-autenticar desde la maquina local y copiar el archivo con `gcloud compute scp`.
+
+## Auth de Claude Code (la del bot, no la de los MCP)
+
+La VM usa un token de larga duracion en `.env` (`CLAUDE_CODE_OAUTH_TOKEN`, scope `user:inference`, dura 1 año). El SDK lo hereda por `process.env` al spawnear el CLI.
+
+Decisión: antes se copiaba `~/.claude/.credentials.json` desde local, pero eso hacia que la VM y la maquina local compartieran la misma sesion OAuth. Cuando una refrescaba, el refresh token rotaba y la otra quedaba con uno viejo; el refresh fallaba y Claude Code **blanqueaba** `claudeAiOauth` (accessToken y refreshToken en `""`, `expiresAt` en 0). Sintoma: toda query muere al instante con `Claude Code process exited with code 1`, sin mas detalle en los logs del bot.
+
+Para ver el error real, correr una query aislada desde `~/claude-slack-bot` (la resolucion ESM necesita que el script viva dentro del proyecto):
+
+```
+[result] success "Failed to authenticate: OAuth session expired and could not be refreshed"
+```
+
+Renovacion (`claude setup-token` necesita browser, asi que es headless-con-asistencia):
+1. En la VM, lanzar `claude setup-token` bajo un pty con stdin desde un FIFO, para poder leer la URL e inyectar el codigo despues.
+2. Abrir la URL en un browser, autorizar, copiar el codigo.
+3. Escribir el codigo en el FIFO y despues un `\r` aparte — la TUI no toma `\n` como Enter.
+4. Guardar el token en `.env` y reiniciar el servicio.
+
+Al extraer el token del output del pty, ojo con el regex: despues de limpiar ANSI el texto queda pegado (`...b1EzogAAStorethistokensecurely`) y un `sk-ant-oat01-[A-Za-z0-9_-]+` se come la frase siguiente. El token son 108 chars.
 
 ## Slack
 
